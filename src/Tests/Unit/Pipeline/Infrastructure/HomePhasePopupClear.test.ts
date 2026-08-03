@@ -1,38 +1,35 @@
 /**
- * HOME.PRE obstruction clearing — regression guard for the Max
- * marketing bottom-sheet.
+ * HOME.PRE is strictly passive — regression guard for the dismissal that
+ * 8.6.1 added here and 8.6.0 never had.
  *
- * <p>Field evidence (Docker run `29-07-2026_12044893`): the popup
- * interceptor only runs on the phase boundary (`beforePhase`), so its
- * HOME probe fired at 12:05:10 and reported `dismissed:1` (the cookie
- * banner). HOME.PRE discovery then ran for a further 61 s, during
- * which max.co.il rendered a marketing sheet behind a full-page
- * `cdk-overlay-backdrop`. The ACTION force-click at 12:06:11 was
- * therefore dispatched at coordinates owned by the backdrop —
- * Playwright reported `Tier force-1: OK` while `preClickUrl ===
- * postClickUrl` and HOME.FINAL logged `form-ready: false`.
+ * <p>Rule #20 reserves DOM mutation for ACTION. 8.6.1 inserted a
+ * `dismissPopups` at the END of HOME.PRE, i.e. AFTER `triggerTarget` had
+ * already been resolved. Closing an overlay at that point can detach or
+ * hide the very element ACTION is about to click — on a Wix-hosted
+ * homepage the well-known close candidates also match the site's own
+ * expanded navigation menu (`aria-label="סגירה,יש לנווט …"`), which is
+ * where the login trigger lives. HOME then reports success without ever
+ * reaching the login page, and the first hard gate is PRE-LOGIN, which
+ * blames itself with "no password field".
  *
- * <p>The invariant these tests lock: HOME.PRE clears blocking overlays
- * AFTER discovery completes, so the ACTION click lands on the real
- * trigger rather than on a backdrop that appeared mid-discovery.
+ * <p>Obstruction clearing still happens on the phase boundary via
+ * {@link createPopupInterceptor}, which runs BEFORE discovery.
+ *
+ * <p>Test Case IDs:
+ *   - T-HOMEPRE-1 (FIRING): HOME.PRE issues zero clicks.
+ *   - T-HOMEPRE-2: HOME.PRE still returns the discovered trigger.
  */
 
-import type { Page } from 'playwright-core';
-
 import type { SelectorCandidate } from '../../../../Scrapers/Base/Config/LoginConfigTypes.js';
-import type {
-  IElementMediator,
-  IRaceResult,
-} from '../../../../Scrapers/Pipeline/Mediator/Elements/ElementMediator.js';
+import type { IRaceResult } from '../../../../Scrapers/Pipeline/Mediator/Elements/ElementMediator.js';
 import { NOT_FOUND_RESULT } from '../../../../Scrapers/Pipeline/Mediator/Elements/ElementMediator.js';
 import { HomePhase } from '../../../../Scrapers/Pipeline/Phases/Home/HomePhase.js';
-import { WK_CLOSE_POPUP } from '../../../../Scrapers/Pipeline/Registry/WK/SharedWK.js';
 import { some } from '../../../../Scrapers/Pipeline/Types/Option.js';
 import type {
   IBrowserState,
   IPipelineContext,
 } from '../../../../Scrapers/Pipeline/Types/PipelineContext.js';
-import { succeed } from '../../../../Scrapers/Pipeline/Types/Procedure.js';
+import { isOk, succeed } from '../../../../Scrapers/Pipeline/Types/Procedure.js';
 import { makeMockMediator } from '../../Scrapers/Pipeline/MockPipelineFactories.js';
 import { makeMockContext, makeMockPage } from './MockFactories.js';
 
@@ -53,133 +50,99 @@ const TRIGGER_FOUND: IRaceResult = {
 /** Every `resolveAndClick` candidate group seen during a phase run. */
 type ClickLog = SelectorCandidate[][];
 
-/**
- * Build a page stub that satisfies the HOME resolver's lifecycle calls.
- *
- * @param pageUrl - URL the page reports before and after navigation.
- * @returns Page stub.
- */
-function makeHomePage(pageUrl: string): Page {
-  const frame = {
-    /**
-     * Report the frame URL.
-     * @returns Page URL string.
-     */
-    url: (): string => pageUrl,
-  };
-  return {
-    ...makeMockPage(pageUrl),
-    /**
-     * Report the main frame.
-     * @returns Frame stub.
-     */
-    mainFrame: (): object => frame,
-    /**
-     * Report all frames.
-     * @returns Single-frame list.
-     */
-    frames: (): object[] => [frame],
-  } as unknown as Page;
+/** What HOME.PRE was observed doing during one run. */
+interface IProbeLog {
+  /** Candidate groups HOME.PRE tried to click — must stay empty. */
+  readonly clicks: ClickLog;
+  /** Trigger matches handed to the resolver, in call order. */
+  readonly discovered: IRaceResult[];
 }
 
 /**
- * Build a mediator that records every `resolveAndClick` candidate group.
- *
- * @param log - Mutable sink collecting the candidate groups.
- * @param pageUrl - URL the mediator reports.
- * @param hasOverlay - When false, the close-popup group resolves as
- *   not-found so the "nothing to dismiss" branch is genuinely driven.
- * @returns Recording mediator stub.
+ * Build a HOME context whose mediator records every click attempt and
+ * every trigger match discovery consumed.
+ * @param probes - Mutable observation log.
+ * @returns Pipeline context wired to the recording mediator.
  */
-function makeRecordingMediator(
-  log: ClickLog,
-  pageUrl: string,
-  hasOverlay: boolean,
-): IElementMediator {
-  return makeMockMediator({
+function makeCtx(probes: IProbeLog): IPipelineContext {
+  const page = makeMockPage(MOCK_CONFIG.urls.base);
+  const browserState: IBrowserState = {
+    page,
+    context: {} as unknown as IBrowserState['context'],
+    cleanups: [],
+  };
+  const mediator = makeMockMediator({
     /**
-     * Report the current URL.
-     * @returns Page URL string.
+     * URL mock.
+     * @returns Homepage URL.
      */
-    getCurrentUrl: (): string => pageUrl,
+    getCurrentUrl: (): string => MOCK_CONFIG.urls.base,
     /**
-     * Resolve a single visible candidate.
+     * Single-winner probe used by the resolver's prefer-direct step.
      * @returns The located trigger.
      */
     resolveVisible: () => Promise.resolve(TRIGGER_FOUND),
     /**
-     * Resolve every visible candidate — the HOME resolver's probe.
-     * @returns Single-element found list.
+     * Enumerated trigger matches consumed by HomeResolver.
+     * @returns One found trigger.
      */
-    resolveAllVisible: () => Promise.resolve([TRIGGER_FOUND]),
-    /**
-     * Record the candidate group, then report the scripted outcome.
-     * @param candidates - Candidate group under test.
-     * @returns Successful race result (found only when applicable).
-     */
-    resolveAndClick: (candidates: readonly SelectorCandidate[]) => {
-      log.push([...candidates]);
-      const isAbsent = isClosePopupGroup(candidates) && !hasOverlay;
-      const clicked = succeed(isAbsent ? NOT_FOUND_RESULT : TRIGGER_FOUND);
-      return Promise.resolve(clicked);
+    resolveAllVisible: () => {
+      probes.discovered.push(TRIGGER_FOUND);
+      return Promise.resolve([TRIGGER_FOUND]);
     },
     /**
-     * Report no scannable hrefs.
+     * Records the candidate group of every click HOME.PRE attempts.
+     * @param candidates - Candidate group being clicked.
+     * @returns Success reporting nothing found.
+     */
+    resolveAndClick: (candidates: readonly SelectorCandidate[]) => {
+      probes.clicks.push([...candidates]);
+      const outcome = succeed(NOT_FOUND_RESULT);
+      return Promise.resolve(outcome);
+    },
+    /**
+     * No href fallback needed.
      * @returns Empty list.
      */
     collectAllHrefs: () => Promise.resolve([]),
   });
-}
-
-/**
- * Assemble a HOME pipeline context wired to a recording mediator.
- *
- * @param log - Mutable sink collecting `resolveAndClick` groups.
- * @param hasOverlay - Whether a dismissible overlay is present.
- * @returns Pipeline context ready for `HomePhase.pre`.
- */
-function makeHomeCtx(log: ClickLog, hasOverlay: boolean): IPipelineContext {
-  const pageUrl = 'https://www.max.co.il/';
-  const browser: IBrowserState = {
-    page: makeHomePage(pageUrl),
-    context: {} as unknown as IBrowserState['context'],
-    cleanups: [],
-  };
-  const mediator = makeRecordingMediator(log, pageUrl, hasOverlay);
   return makeMockContext({
-    browser: some(browser),
+    browser: some(browserState),
     mediator: some(mediator),
     config: MOCK_CONFIG,
   });
 }
 
 /**
- * Whether a recorded group is the shared close-popup well-known group.
- *
- * @param group - One recorded candidate group.
- * @returns True when the group is `WK_CLOSE_POPUP`.
+ * Fresh observation log for one phase run.
+ * @returns Empty click + discovery log.
  */
-function isClosePopupGroup(group: readonly SelectorCandidate[]): boolean {
-  const expected = WK_CLOSE_POPUP as readonly SelectorCandidate[];
-  if (group.length !== expected.length) return false;
-  return group.every((c, i): boolean => c.value === expected[i].value);
+function newProbeLog(): IProbeLog {
+  return { clicks: [], discovered: [] };
 }
 
-describe('HomePhase/PRE obstruction clearing', () => {
-  it('dismisses a blocking overlay after discovery completes', async () => {
-    const log: ClickLog = [];
-    const ctx = makeHomeCtx(log, true);
+describe('HomePhase.pre — strictly passive (T-HOMEPRE)', () => {
+  it('T-HOMEPRE-1 (FIRING): issues zero clicks', async () => {
+    const probes = newProbeLog();
+    const ctx = makeCtx(probes);
     await new HomePhase().pre(ctx, ctx);
-    const didProbeClosePopup = log.some(isClosePopupGroup);
-    expect(didProbeClosePopup).toBe(true);
+    expect(probes.clicks).toEqual([]);
   });
 
-  it('still probes, and reports PRE success, when no overlay is present', async () => {
-    const log: ClickLog = [];
-    const ctx = makeHomeCtx(log, false);
+  it('T-HOMEPRE-2: succeeds having consumed the discovered trigger', async () => {
+    const probes = newProbeLog();
+    const ctx = makeCtx(probes);
     const result = await new HomePhase().pre(ctx, ctx);
-    const didProbeClosePopup = log.some(isClosePopupGroup);
-    expect(result.success).toBe(true);
-    expect(didProbeClosePopup).toBe(true);
+    const wasOk = isOk(result);
+    // Discovery consults `resolveAllVisible` twice — once in
+    // `resolveHomeTrigger`, once in `preferDirectEntry` — so assert the
+    // content of every match rather than the call count.
+    const didDiscover = probes.discovered.length > 0;
+    const isEveryMatchTheTrigger = probes.discovered.every((r): boolean => r === TRIGGER_FOUND);
+    expect({ wasOk, didDiscover, isEveryMatchTheTrigger }).toEqual({
+      wasOk: true,
+      didDiscover: true,
+      isEveryMatchTheTrigger: true,
+    });
   });
 });

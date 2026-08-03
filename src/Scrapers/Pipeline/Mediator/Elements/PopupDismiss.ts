@@ -21,7 +21,17 @@ const MAX_POPUP_ATTEMPTS = 2;
 /** Wait for SPA state update after popup dismissal (ms). */
 const POPUP_SETTLE_MS = 1000;
 
-/** Inputs for a single dismissal attempt. */
+/**
+ * Inputs for a single dismissal attempt.
+ *
+ * <p>No per-attempt timeout: every attempt uses the mediator's default race
+ * budget. A follow-up attempt briefly waited 30 s for a late overlay, which
+ * held the homepage in a continuous multi-locator race on every bank that
+ * shows any popup — Akamai answered a CI-runner IP with an edge block. Late
+ * overlays are covered by the sanitization pulse instead, which re-runs this
+ * probe after HOME.POST fails: later in wall-clock time than any widened
+ * wait, at no idle cost.
+ */
 interface IDismissAttempt {
   readonly mediator: IElementMediator;
   readonly logger: ScraperLogger;
@@ -35,30 +45,51 @@ interface IDismissState extends IDismissAttempt {
 }
 
 /**
- * Attempt to dismiss one popup via WK_CLOSE_POPUP.
- * @param root0 - Inputs for this attempt.
- * @param root0.mediator - Element mediator.
- * @param root0.logger - Pipeline logger.
- * @param root0.attempt - 1-based attempt index.
- * @returns True if a popup was found and clicked.
+ * Click the first close control that resolves for this attempt.
+ * @param input - Inputs for this attempt.
+ * @returns Masked text of the dismissed control, or false when none resolved.
  */
-async function tryDismissOnce({ mediator, logger, attempt }: IDismissAttempt): Promise<boolean> {
-  const result = await mediator.resolveAndClick(WK_CLOSE_POPUP).catch((): false => false);
+async function clickCloseControl(input: IDismissAttempt): Promise<string | false> {
+  const result = await input.mediator.resolveAndClick(WK_CLOSE_POPUP).catch((): false => false);
   if (result === false) return false;
   if (!result.success || !result.value.found) return false;
-  const masked = maskVisibleText(result.value.value);
-  logger.debug({ text: masked, attempt, max: MAX_POPUP_ATTEMPTS });
-  await mediator.waitForNetworkIdle(POPUP_SETTLE_MS).catch((): false => false);
+  return maskVisibleText(result.value.value);
+}
+
+/**
+ * Attempt to dismiss one popup via WK_CLOSE_POPUP.
+ * @param input - Inputs for this attempt.
+ * @returns True if a popup was found and clicked.
+ */
+async function tryDismissOnce(input: IDismissAttempt): Promise<boolean> {
+  const masked = await clickCloseControl(input);
+  if (masked === false) return false;
+  input.logger.debug({ text: masked, attempt: input.attempt, max: MAX_POPUP_ATTEMPTS });
+  await input.mediator.waitForNetworkIdle(POPUP_SETTLE_MS).catch((): false => false);
   return true;
 }
 
 /**
- * Dismiss sequentially from the given attempt, stopping at the first
- * attempt that finds nothing left to close.
+ * Advance to the next attempt.
+ * @param state - Current recursion state.
+ * @returns State for the following attempt.
+ */
+function nextAttempt(state: IDismissState): IDismissState {
+  return {
+    ...state,
+    attempt: state.attempt + 1,
+    dismissed: state.dismissed + 1,
+  };
+}
+
+/**
+ * Dismiss sequentially from the given attempt, stopping at the first attempt
+ * that finds nothing left to close.
  *
  * <p>Recursive rather than a loop because attempts are strictly sequential
  * (each dismissal must settle the SPA before the next popup can resolve)
  * and `no-await-in-loop` is an error in this cluster.
+ *
  * @param state - Mediator, logger, 1-based attempt index and running count.
  * @returns Count of dismissed popups.
  */
@@ -66,7 +97,7 @@ async function dismissFrom(state: IDismissState): Promise<number> {
   if (state.attempt > MAX_POPUP_ATTEMPTS) return state.dismissed;
   const didDismiss = await tryDismissOnce(state);
   if (!didDismiss) return state.dismissed;
-  const next = { ...state, attempt: state.attempt + 1, dismissed: state.dismissed + 1 };
+  const next = nextAttempt(state);
   return dismissFrom(next);
 }
 
