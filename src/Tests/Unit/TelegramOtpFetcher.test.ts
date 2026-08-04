@@ -11,49 +11,18 @@
 import { jest } from '@jest/globals';
 
 import { fetchOtpFromTelegram, type ITelegramFetchArgs } from '../E2eReal/TelegramOtpFetcher.js';
-
-/** Minimal pino-shaped logger for tests. */
-interface ITestLogger {
-  readonly trace: jest.Mock;
-  readonly debug: jest.Mock;
-  readonly info: jest.Mock;
-  readonly warn: jest.Mock;
-  readonly error: jest.Mock;
-}
-
-/**
- * Build a fresh stub logger.
- * @returns Logger with every method as `jest.fn()`.
- */
-function makeStubLogger(): ITestLogger {
-  return {
-    trace: jest.fn(),
-    debug: jest.fn(),
-    info: jest.fn(),
-    warn: jest.fn(),
-    error: jest.fn(),
-  };
-}
+import {
+  type IHttpFailure,
+  type ITestLogger,
+  makeFailedResponse,
+  makeOkResponse,
+  makeStubLogger,
+  UNAUTHORIZED_FAILURE,
+} from '../Helpers/TelegramOtpFixtures.js';
 
 /** Captures `fetch` calls per test. */
 let fetchSpy: jest.Mock;
 let originalFetch: typeof fetch | undefined;
-
-/**
- * Build a Response-shaped stub.
- * @param body - Body to expose via `json()`.
- * @returns Response stub.
- */
-function makeFetchResponse(body: Record<string, unknown>): Response {
-  /**
-   * Body accessor — returns the queued payload synchronously
-   * wrapped in a resolved promise (matches the Response.json
-   * contract without a real await).
-   * @returns The body.
-   */
-  const json = (): Promise<unknown> => Promise.resolve(body);
-  return { ok: true, json } as unknown as Response;
-}
 
 /** Mock fetch responses — separate queues per Telegram endpoint. */
 interface IFetchQueues {
@@ -138,7 +107,7 @@ function installFetch(queues: IFetchQueues): jest.Mock {
     } else {
       throw new InstallFetchUnexpectedEndpointError(u);
     }
-    const response = makeFetchResponse(body);
+    const response = makeOkResponse(body);
     return Promise.resolve(response);
   };
   fetchSpy = jest.fn(impl);
@@ -376,6 +345,77 @@ function flushUntilUrlPresent(spy: jest.Mock, urlRegex: RegExp, maxTicks = 200):
   return Promise.resolve().then((): Promise<boolean> =>
     flushUntilUrlPresent(spy, urlRegex, maxTicks - 1),
   );
+}
+
+/** Token used only by the leak probe — never a real credential. */
+const LEAK_PROBE_TOKEN = '123456:AA-LEAK-PROBE-TOKEN';
+
+/**
+ * Named transport error for rejection fixtures. `AbortSignal.timeout`
+ * really does throw a `DOMException` named `TimeoutError`, so this
+ * mirrors production shape without declaring a second class (the
+ * file is at its `max-classes-per-file` ceiling).
+ *
+ * @param name - Error name (e.g. `TimeoutError`).
+ * @param message - Error message.
+ * @returns Error instance carrying the requested name.
+ */
+function makeTransportError(name: string, message: string): Error {
+  return new DOMException(message, name);
+}
+
+/**
+ * Install a fetch whose `sendMessage` always fails at HTTP level.
+ * @param failure - Status/body knobs.
+ * @returns The installed spy.
+ */
+function installFailingPrompt(failure: IHttpFailure): jest.Mock {
+  /**
+   * Always-failing implementation.
+   * @returns Rejected-status response stub.
+   */
+  const impl = (): Promise<Response> => {
+    const response = makeFailedResponse(failure);
+    return Promise.resolve(response);
+  };
+  fetchSpy = jest.fn(impl);
+  originalFetch = globalThis.fetch;
+  (globalThis as { fetch: typeof fetch }).fetch = fetchSpy;
+  return fetchSpy;
+}
+
+/**
+ * Install a fetch that rejects — simulates DNS hang / TLS reset /
+ * the {@link HTTP_TIMEOUT_MS} abort, none of which yield a Response.
+ *
+ * @param error - Rejection value.
+ * @returns The installed spy.
+ */
+function installThrowingPrompt(error: Error): jest.Mock {
+  /**
+   * Always-rejecting implementation.
+   * @returns Rejected promise.
+   */
+  const impl = (): Promise<Response> => Promise.reject(error);
+  fetchSpy = jest.fn(impl);
+  originalFetch = globalThis.fetch;
+  (globalThis as { fetch: typeof fetch }).fetch = fetchSpy;
+  return fetchSpy;
+}
+
+/**
+ * Read the payload of the `prompt-failed` warn emission.
+ * @param log - Stub logger handed to the fetcher.
+ * @returns The logged payload, or an empty record when absent.
+ */
+function readPromptFailedPayload(log: ITestLogger): Record<string, unknown> {
+  const calls = log.warn.mock.calls as readonly (readonly unknown[])[];
+  const hit = calls.find((call): boolean => {
+    const payload = call[0] as { event?: string };
+    return payload.event === 'telegram.otp.fetch.prompt-failed';
+  });
+  const found = hit === undefined ? {} : hit[0];
+  return found as Record<string, unknown>;
 }
 
 afterEach(async (): Promise<void> => {
@@ -806,13 +846,13 @@ describe('fetchOtpFromTelegram', () => {
       const u = typeof url === 'string' ? url : '';
       if (u.includes('/sendMessage')) {
         const sendBody = defaultPromptResponse();
-        const sendResponse = makeFetchResponse(sendBody);
+        const sendResponse = makeOkResponse(sendBody);
         return Promise.resolve(sendResponse);
       }
       const queue = queueAt();
       const visible = applyThrottle(queue);
       const body = { ok: true, result: visible };
-      const updatesResponse = makeFetchResponse(body);
+      const updatesResponse = makeOkResponse(body);
       return Promise.resolve(updatesResponse);
     };
     fetchSpy = jest.fn(throttledImpl);
@@ -863,7 +903,7 @@ describe('fetchOtpFromTelegram', () => {
     const stickyImpl = (url: unknown): Promise<Response> => {
       const u = typeof url === 'string' ? url : '';
       const body = u.includes('/sendMessage') ? defaultPromptResponse() : staleResp;
-      const response = makeFetchResponse(body);
+      const response = makeOkResponse(body);
       return Promise.resolve(response);
     };
     fetchSpy = jest.fn(stickyImpl);
@@ -878,5 +918,65 @@ describe('fetchOtpFromTelegram', () => {
     // call. Wait until offset=73 specifically appears.
     const didConfirmAt73 = await flushUntilUrlPresent(fetchSpy, /offset=73(?!\d)/);
     expect(didConfirmAt73).toBe(true);
+  });
+
+  it('TF-15 bad credentials — 401 surfaces the Telegram description', async (): Promise<void> => {
+    // Pins the non-retryable arm of the failure taxonomy: a 401 is a
+    // caller defect, so the fetcher gives up on the first rejection
+    // and the assertion costs no wall clock. The retryable arm (429)
+    // lives in TelegramOtpPromptRetry.test.ts, where `humanDelay` is
+    // mocked — here it would drive the real ladder, spending seconds
+    // of genuine sleep against Jest's default timeout.
+    installFailingPrompt(UNAUTHORIZED_FAILURE);
+    const log = makeStubLogger();
+    const args = makeArgs({ log } as unknown as Partial<ITelegramFetchArgs>);
+    const result = await fetchOtpFromTelegram(args);
+    expect(result).toBe(false);
+    const payload = readPromptFailedPayload(log);
+    expect(payload).toMatchObject({
+      status: 401,
+      errorCode: 401,
+      description: 'Unauthorized',
+      retryAfterSeconds: 0,
+    });
+  });
+
+  it('TF-17 transport throw — records status 0 and the thrown error', async (): Promise<void> => {
+    // `AbortSignal.timeout` / DNS hang / TLS reset never produce a
+    // Response. `status: 0` is the sentinel that says so, and the
+    // description carries the throw so a hang is distinguishable
+    // from a Telegram-side rejection in `pipeline.log` alone.
+    const aborted = makeTransportError('TimeoutError', 'The operation was aborted');
+    installThrowingPrompt(aborted);
+    const log = makeStubLogger();
+    const args = makeArgs({ log } as unknown as Partial<ITelegramFetchArgs>);
+    const result = await fetchOtpFromTelegram(args);
+    expect(result).toBe(false);
+    const payload = readPromptFailedPayload(log);
+    expect(payload).toMatchObject({ status: 0, errorCode: 0, retryAfterSeconds: 0 });
+    const described = String(payload.description);
+    expect(described).toContain('The operation was aborted');
+  });
+
+  it('TF-18 secret hygiene — the bot token never reaches the log', async (): Promise<void> => {
+    // Node surfaces the request URL inside some `fetch` rejections,
+    // and that URL embeds the token (`/bot<TOKEN>/sendMessage`). The
+    // forensic bundle is uploaded to object storage, so a leak here
+    // would publish a live CI secret.
+    const leaky = `TypeError: fetch failed https://api.telegram.org/bot${LEAK_PROBE_TOKEN}/sendMessage`;
+    const thrown = makeTransportError('TypeError', leaky);
+    installThrowingPrompt(thrown);
+    const log = makeStubLogger();
+    const overrides = { log, botToken: LEAK_PROBE_TOKEN } as unknown as Partial<ITelegramFetchArgs>;
+    const args = makeArgs(overrides);
+    const result = await fetchOtpFromTelegram(args);
+    expect(result).toBe(false);
+    // Scan EVERY warn payload, not just the terminal failure: a leak
+    // confined to the retry log would otherwise slip through.
+    const emitted = JSON.stringify(log.warn.mock.calls);
+    expect(emitted).not.toContain(LEAK_PROBE_TOKEN);
+    const payload = readPromptFailedPayload(log);
+    const described = String(payload.description);
+    expect(described).toContain('***');
   });
 });
