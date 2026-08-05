@@ -11,8 +11,6 @@
  * context) are unit-pinned at the end of the file.
  */
 
-import { jest } from '@jest/globals';
-
 import { ScraperErrorTypes } from '../../../../../Scrapers/Base/ErrorTypes.js';
 import { ONE_ZERO_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/OneZero/scrape/OneZeroShape.js';
 import { PAYBOX_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/PayBox/scrape/PayBoxShape.js';
@@ -43,69 +41,8 @@ import type {
 import type { Procedure } from '../../../../../Scrapers/Pipeline/Types/Procedure.js';
 import { fail, succeed } from '../../../../../Scrapers/Pipeline/Types/Procedure.js';
 import { assertHas, assertOk } from '../../../../Helpers/AssertProcedure.js';
-import { makeMockContext, makeRecoverySessionStubs } from '../../Infrastructure/MockFactories.js';
-
-const FIXT_UID = 'pb-uid-fixture-1';
-const FIXT_DEVICE = 'fixt-device-pb-0001';
-const FIXT_TOKEN = 'fixt-jwt-pb-0001';
-
-/** PayBox session-context fixture used by extractAccountsFromSessionContext. */
-const PAYBOX_SESSION: Readonly<Record<string, unknown>> = Object.freeze({
-  uId: FIXT_UID,
-  deviceId16Hex: FIXT_DEVICE,
-  token: FIXT_TOKEN,
-});
-
-/** Route per-call apiPost dispatch via the WK URL tag. */
-const URL_TAG_TO_OP: Readonly<Record<string, 'balance' | 'transactions'>> = {
-  'data.sync': 'balance',
-  'data.getUserHistory': 'transactions',
-  'data.virtualCardTranRequest': 'transactions',
-};
-
-/**
- * Build a router-backed mock mediator pre-seeded with PayBox session.
- * @param router - Per-op ordered response queue.
- * @returns Mock mediator.
- */
-function makePayBoxBus(router: Record<string, readonly Procedure<unknown>[]>): IApiMediator {
-  const queues: Record<string, Procedure<unknown>[]> = {};
-  for (const key of Object.keys(router)) queues[key] = [...router[key]];
-  /**
-   * Shift the queue for an operation, surfacing a clear failure when empty.
-   * @param op - Operation label.
-   * @returns Next queued procedure.
-   */
-  async function route(op: string): Promise<Procedure<unknown>> {
-    await Promise.resolve();
-    const q = queues[op] ?? [];
-    const head = q.shift();
-    if (head) return head;
-    return fail(ScraperErrorTypes.Generic, `no stub for op=${op}`);
-  }
-  const apiPost = jest.fn((urlTag: string) => route(URL_TAG_TO_OP[urlTag] ?? 'customer'));
-  return {
-    apiPost,
-    apiGet: jest.fn(),
-    apiQuery: jest.fn(route),
-    setBearer: jest.fn(),
-    setRawAuth: jest.fn(),
-    setSessionContext: jest.fn(),
-    ...makeRecoverySessionStubs(),
-    getSessionContext: jest.fn((): Readonly<Record<string, unknown>> => PAYBOX_SESSION),
-  } as unknown as IApiMediator;
-}
-
-/**
- * Build an IActionContext wired with the PayBox bus.
- * @param bus - Mock mediator.
- * @returns Action context.
- */
-function ctxOf(bus: IApiMediator): IActionContext {
-  const overrides: Partial<IPipelineContext> = { apiMediator: some(bus) };
-  const base = makeMockContext(overrides);
-  return base as unknown as IActionContext;
-}
+import { makeMockContext } from '../../Infrastructure/MockFactories.js';
+import { ctxOf, FIXT_DEVICE, FIXT_TOKEN, FIXT_UID, makePayBoxBus } from './PayBoxBusFactory.js';
 
 describe('PayBoxShape integration — wallet', () => {
   it('synthesises one wallet account from session-context and walks pagination once', async () => {
@@ -192,22 +129,22 @@ describe('PayBoxShape wallet pagination', () => {
 
   it('nextWalletCursor returns false when items are empty', () => {
     const seed = { ts: 'null', page: 0 };
-    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, []);
+    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, [], []);
     expect(next).toBe(false);
   });
 
   it('nextWalletCursor returns false when oldest ts stalls', () => {
-    const seed = { ts: '100', page: 0 };
-    const items = [{ ts: '200' }, { ts: '100' }];
-    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, items);
+    const seed = { ts: '2024-01-01T00:00:00Z', page: 0 };
+    const items = [{ ts: '2024-01-02T00:00:00Z' }, { ts: '2024-01-01T00:00:00Z' }];
+    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, items, items);
     expect(next).toBe(false);
   });
 
   it('nextWalletCursor advances to oldest ts when distinct', () => {
     const seed = { ts: 'null', page: 0 };
-    const items = [{ ts: '200' }, { ts: '150' }];
-    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, items);
-    expect(next).toEqual({ ts: '150', page: 1 });
+    const items = [{ ts: '2024-01-02T00:00:00Z' }, { ts: '2024-01-01T00:00:00Z' }];
+    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, items, items);
+    expect(next).toMatchObject({ ts: '2024-01-01T00:00:00Z', page: 1 });
   });
 
   it('txnsExtractPage maps wallet rows + advances cursor', () => {
@@ -218,7 +155,11 @@ describe('PayBoxShape wallet pagination', () => {
     };
     const page = txnsExtractPage({ body, cursor: false, acct: walletAcct, ctx });
     expect(page.items).toHaveLength(1);
-    expect(page.nextCursor).toEqual({ ts: '2026-05-14T07:00:29.037Z', page: 1 });
+    expect(page.nextCursor).toEqual({
+      ts: '2026-05-14T07:00:29.037Z',
+      page: 1,
+      seenIds: ['a'],
+    });
   });
 
   it('txnsExtractPage returns empty + false cursor when content missing', () => {
@@ -308,7 +249,7 @@ describe('PayBoxShape pagination terminators', () => {
     // page+1 === WALLET_PAGE_CAP triggers the cap-guard.
     const seed = { ts: 'seed', page: 23 };
     const items = [{ ts: 'newer' }];
-    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, items);
+    const next = PAYBOX_TXNS_INTERNALS.nextWalletCursor(seed, items, items);
     expect(next).toBe(false);
   });
 });

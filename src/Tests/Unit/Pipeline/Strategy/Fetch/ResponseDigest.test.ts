@@ -116,3 +116,132 @@ describe('digestResponse', () => {
     expect(digest.respLength).toBeGreaterThan(hebrewBody.length);
   });
 });
+
+/**
+ * `respKeys` names only the envelope, so a successful PayBox wallet fetch
+ * digests to `["code","content"]` whatever the rows hold. A blank-payee
+ * defect was therefore undiagnosable from logs: nothing named the fields
+ * the bank actually sent. These tests pin the row-level diagnostic that
+ * closes the gap — names only, values never.
+ */
+describe('digestResponse row-level field names', () => {
+  it('T-DIGEST-12: names the fields of a nested collection', () => {
+    const body = JSON.stringify({
+      code: 0,
+      content: { wallet: [{ id: 7, merchantName: 'x', ts: '2025-01-01' }] },
+    });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['id', 'merchantName', 'ts']);
+  });
+
+  it('T-DIGEST-13: prefers the shallowest collection over a deeper one', () => {
+    const body = JSON.stringify({
+      items: [{ shallow: 1 }],
+      nested: { deeper: [{ deep: 1 }] },
+    });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['shallow']);
+  });
+
+  it('T-DIGEST-14: names row fields of a top-level array body', () => {
+    const body = JSON.stringify([{ amount: 1, text: 'y' }]);
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['amount', 'text']);
+  });
+
+  // A field the bank omits on some rows is exactly the signal being hunted,
+  // so a single-row sample would hide it.
+  it('T-DIGEST-15: unions fields that only some sampled rows carry', () => {
+    const body = JSON.stringify({ rows: [{ a: 1 }, { b: 2 }, { c: 3 }] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['a', 'b', 'c']);
+  });
+
+  it('T-DIGEST-16: never emits row values, only row field names', () => {
+    const body = JSON.stringify({
+      content: { wallet: [{ merchantName: 'דני כהן', phone: '0501234567' }] },
+    });
+
+    const digest = digestResponse(body);
+    const emitted = JSON.stringify(digest);
+
+    expect(digest.rowKeys).toEqual(['merchantName', 'phone']);
+    expect(emitted).not.toContain('דני כהן');
+    expect(emitted).not.toContain('0501234567');
+  });
+
+  // A payload keyed by account number would otherwise leak that number
+  // through its key names alone. A short numeric key is just as
+  // identifying (a card suffix) and carries no schema information.
+  it('T-DIGEST-17: drops bare numeric field names of any length', () => {
+    const body = JSON.stringify({ rows: [{ '12345678': 1, '1234': 2, label: 'ok' }] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['label']);
+  });
+
+  it('T-DIGEST-18: stays empty when the body carries no collection', () => {
+    const digest = digestResponse(PAYBOX_REJECTION);
+
+    expect(digest.rowKeys).toEqual([]);
+  });
+
+  it('T-DIGEST-19: ignores an array of scalars', () => {
+    const body = JSON.stringify({ codes: [1, 2, 3] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual([]);
+  });
+
+  it('T-DIGEST-20: bounds how many field names a wide row can emit', () => {
+    const wideEntries = Array.from({ length: 60 }, (_unused, i) => [
+      `f${String(i).padStart(3, '0')}`,
+      i,
+    ]);
+    const wideRow = Object.fromEntries(wideEntries) as Record<string, number>;
+    const body = JSON.stringify({ rows: [wideRow] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toHaveLength(40);
+  });
+
+  // Every other fixture happens to declare its keys alphabetically, so
+  // the sorted contract would survive removing the sort. This one cannot.
+  it('T-DIGEST-21: sorts field names regardless of declaration order', () => {
+    const body = JSON.stringify({ rows: [{ zeta: 1, alpha: 2 }, { mid: 3 }] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['alpha', 'mid', 'zeta']);
+  });
+
+  // Keys are only safe to log while they are SCHEMA. A body keyed by a
+  // value — a phone number, an account reference — turns the key space
+  // into the data space, and dropping bare digits alone does not catch it.
+  it('T-DIGEST-22: drops keys that are not identifier-shaped', () => {
+    const body = JSON.stringify({ rows: [{ '050-123-4567': 1, 'a b': 2, label: 3, _id: 4 }] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['_id', 'label']);
+  });
+
+  it('T-DIGEST-23: drops an over-long key rather than logging it', () => {
+    const body = JSON.stringify({ rows: [{ [`k${'x'.repeat(60)}`]: 1, ok: 2 }] });
+
+    const digest = digestResponse(body);
+
+    expect(digest.rowKeys).toEqual(['ok']);
+  });
+});
