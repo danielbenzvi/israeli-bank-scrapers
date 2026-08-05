@@ -7,9 +7,12 @@
  * synthesises two TAcct entries (wallet + debit) directly from the
  * post-login session-context.
  *
- * The balance for both accounts comes from the same `/sync` endpoint
- * (class-y body). Pagination state for transactions lives in
- * PayBoxShapeTxns.ts (per the 150-LOC ceiling).
+ * The balance for both accounts comes from the same `/sync` endpoint.
+ * `/sync` is answered with HTTP 400 regardless of body shape, and its
+ * body MUST NOT carry the class-y `auth: { … }` envelope — a rejected
+ * request that carried the live token makes PayBox invalidate the whole
+ * session (see {@link balanceVars}). Pagination state for transactions
+ * lives in PayBoxShapeTxns.ts (per the 150-LOC ceiling).
  */
 
 import type {
@@ -77,6 +80,16 @@ export function customerVars(): VarsMap {
 
 /**
  * Balance vars builder — `/sync` takes no per-account variables.
+ *
+ * <p>`/sync` MUST NOT carry the class-y `auth: { … }` envelope. It is
+ * answered with HTTP 400 either way, but a 400 on a body that carried
+ * the live `access_token` makes PayBox reject every later call in the
+ * session: `/getUserHistory` then answers `401 UNAUTHORIZED` (and
+ * `404 UNAUTHORIZED_TOKEN` on a warm token) instead of returning rows.
+ * Forensic run 31015484475 shows the token minted 355 ms earlier by a
+ * successful `loginBySms` refused immediately after `/sync` 400'd.
+ * Sending no envelope keeps the rejection inert: `fallbackOnFail: 0`
+ * degrades the balance to 0 and the transaction scrape still succeeds.
  * @returns Empty variables map.
  */
 export function balanceVars(): VarsMap {

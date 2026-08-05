@@ -92,12 +92,45 @@ const BUDGET_SENTINEL: IBudgetSentinel = { exceeded: true };
  * Build a Promise that resolves to a budget-sentinel after `ms` elapses.
  * The resolved value signals that the per-account wall-clock budget was
  * exceeded; the caller translates it into a typed Procedure.fail.
+ *
+ * `signal` lets the caller cancel the arm once the race is decided. Without
+ * it a losing budget timer stays pending for the full budget and keeps the
+ * settled race — and the account payload it resolved with — reachable.
  * @param ms - Budget in milliseconds.
+ * @param signal - Optional cancellation signal for the losing arm.
  * @returns Budget-sentinel Promise.
  */
-async function budgetElapsed(ms: number): Promise<IBudgetSentinel> {
-  await setTimeoutPromise(ms, undefined, { ref: false });
+async function budgetElapsed(ms: number, signal?: AbortSignal): Promise<IBudgetSentinel> {
+  await setTimeoutPromise(ms, undefined, { ref: false, signal });
   return BUDGET_SENTINEL;
+}
+
+/** The two possible outcomes of the per-account budget race. */
+type BudgetRaceResult = Procedure<ITransactionsAccount> | IBudgetSentinel;
+
+/**
+ * Race the dispatch against its budget, cancelling the budget timer once the
+ * race settles. `abort()` cancels **only** the timer: it rejects the pending
+ * `budgetElapsed` sleep, and that rejection is already observed by the
+ * `Promise.race` subscription, so it can never surface as an unhandled
+ * rejection. The dispatch arm itself is not cancellable — `dispatchOneAccount`
+ * takes no signal — so a budget win leaves that work running to completion.
+ * @param work - In-flight dispatch promise.
+ * @param budgetMs - Budget in milliseconds.
+ * @returns Whichever arm settled first.
+ */
+async function raceAgainstBudget(
+  work: Promise<Procedure<ITransactionsAccount>>,
+  budgetMs: number,
+): Promise<BudgetRaceResult> {
+  const budgetGuard = new AbortController();
+  const budget = budgetElapsed(budgetMs, budgetGuard.signal);
+  const racers: readonly Promise<BudgetRaceResult>[] = [work, budget];
+  try {
+    return await Promise.race(racers);
+  } finally {
+    budgetGuard.abort();
+  }
 }
 
 /** Bundled args for dispatchWithTimeout — respects the 3-param ceiling. */
@@ -123,12 +156,7 @@ interface IDispatchArgs {
 async function dispatchWithTimeout(args: IDispatchArgs): Promise<Procedure<ITransactionsAccount>> {
   const budgetMs = args.timeoutMs ?? PER_ACCOUNT_TIMEOUT_MS;
   const work = dispatchOneAccount(args.fc, args.accountId, args.opts);
-  const budget = budgetElapsed(budgetMs);
-  const racers: readonly (Promise<Procedure<ITransactionsAccount>> | Promise<IBudgetSentinel>)[] = [
-    work,
-    budget,
-  ];
-  const settled = await Promise.race(racers);
+  const settled = await raceAgainstBudget(work, budgetMs);
   if (settled === BUDGET_SENTINEL) {
     const budgetSeconds = Math.round(budgetMs / 1000);
     const budgetSec = String(budgetSeconds);
