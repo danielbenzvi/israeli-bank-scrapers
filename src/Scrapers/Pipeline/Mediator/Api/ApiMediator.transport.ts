@@ -8,7 +8,7 @@ import type { PostData } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, isOk, succeed } from '../../Types/Procedure.js';
 import type {
-  IApiMediatorDeps,
+  IFireGetArgs,
   IFirePostArgs,
   IFireQueryArgs,
   IGraphQLEnvelope,
@@ -75,32 +75,94 @@ function firstErrorMessage(errors: readonly IGraphQLError[]): string {
 }
 
 /**
+ * Matches the operation name in `query X`, `mutation X`, `subscription X`.
+ */
+const OPERATION_NAME_RE = /\b(?:query|mutation|subscription)\s+([A-Za-z_]\w*)/u;
+
+/**
+ * Matches the spans of a GraphQL document that are not executable code:
+ * `#` line comments, `"""block strings"""` and `"string literals"`.
+ *
+ * <p>Block strings are listed before plain strings so a `"""` opener is
+ * never mis-read as an empty `""` literal.
+ */
+const NON_CODE_RE = /#[^\n]*|"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"/gu;
+
+/**
+ * Blank out every non-executable span of a GraphQL document.
+ *
+ * <p>Prose is free to mention `query Something`; without this filter such
+ * a mention would be picked up as the document's operation name and would
+ * mislabel the failing call.
+ * @param queryString - Raw GraphQL document.
+ * @returns Document with comments and string literals replaced by a space.
+ */
+function stripNonCode(queryString: string): string {
+  return queryString.replaceAll(NON_CODE_RE, ' ');
+}
+
+/**
+ * Extract the GraphQL operation name from a query document.
+ *
+ * <p>Anonymous documents (`{ field }`) carry no name, so the caller omits the
+ * label and the long-standing message stays byte-identical. Names mentioned
+ * only inside a comment or a string literal do not count as a definition.
+ * @param queryString - Raw GraphQL document sent to the bank.
+ * @returns Operation name, or '' when the document is anonymous.
+ */
+function operationName(queryString: string): string {
+  const executable = stripNonCode(queryString);
+  const match = OPERATION_NAME_RE.exec(executable);
+  if (match === null) return '';
+  return match[1];
+}
+
+/**
+ * Build the ` [Operation]` segment naming the failing GraphQL call.
+ *
+ * <p>Banks surface their own upstream faults inside the envelope (an opaque
+ * `Request failed with status code 500`), which alone cannot say WHICH read
+ * failed. Naming the operation makes the failure traceable to one stage.
+ * @param operation - Operation name ('' when anonymous).
+ * @returns ` [Name]` or '' when there is no name.
+ */
+function operationLabel(operation: string): string {
+  if (operation.length === 0) return '';
+  return ` [${operation}]`;
+}
+
+/**
  * Fail-helper for GraphQL envelopes with non-empty error list.
  * @param label - First error message label.
+ * @param operation - GraphQL operation name ('' when anonymous).
  * @returns Procedure failure.
  */
-function envelopeErrorFail<T>(label: string): Procedure<T> {
-  return fail(ScraperErrorTypes.Generic, `graphql errors: ${label}`);
+function envelopeErrorFail<T>(label: string, operation: string): Procedure<T> {
+  const at = operationLabel(operation);
+  return fail(ScraperErrorTypes.Generic, `graphql errors${at}: ${label}`);
 }
 
 /**
  * Fail-helper for GraphQL envelopes whose `data` field is undefined.
+ * @param operation - GraphQL operation name ('' when anonymous).
  * @returns Procedure failure.
  */
-function envelopeMissingDataFail<T>(): Procedure<T> {
-  return fail(ScraperErrorTypes.Generic, 'graphql response missing data');
+function envelopeMissingDataFail<T>(operation: string): Procedure<T> {
+  const at = operationLabel(operation);
+  return fail(ScraperErrorTypes.Generic, `graphql response${at} missing data`);
 }
 
 /**
  * Unwrap a GraphQL envelope to a Procedure payload.
  * @param envelope - Raw GraphQL response object.
+ * @param operation - GraphQL operation name ('' when anonymous).
  * @returns Procedure with unwrapped data.
  */
-function unwrapGraphql<T>(envelope: IGraphQLEnvelope<T>): Procedure<T> {
+function unwrapGraphql<T>(envelope: IGraphQLEnvelope<T>, operation: string): Procedure<T> {
   const errors = envelope.errors ?? [];
   const errorLabel = firstErrorMessage(errors);
-  if (errorLabel.length > 0) return envelopeErrorFail<T>(errorLabel);
-  if (envelope.data === undefined) return envelopeMissingDataFail<T>();
+  if (errorLabel.length > 0) return envelopeErrorFail<T>(errorLabel, operation);
+  if (envelope.data === undefined) return envelopeMissingDataFail<T>(operation);
   return succeed(envelope.data);
 }
 
@@ -119,18 +181,24 @@ async function firePost<T>(args: IFirePostArgs): Promise<Procedure<T>> {
 
 /**
  * Execute apiGet after URL resolution has succeeded.
- * @param deps - Bundled collaborators.
- * @param url - Resolved URL.
- * @param rawAuth - Current Authorization header value.
+ * @param args - Bundled fireGet arguments (deps + url + auth + extras).
  * @returns Typed Procedure from the transport.
  */
-async function fireGet<T>(
-  deps: IApiMediatorDeps,
-  url: string,
-  rawAuth: string,
-): Promise<Procedure<T>> {
-  const extraHeaders = buildHeaders(rawAuth);
-  return deps.fetchStrategy.fetchGet<T>(url, { extraHeaders });
+async function fireGet<T>(args: IFireGetArgs): Promise<Procedure<T>> {
+  const extraHeaders = mergeHeaders(args.rawAuth, args.extraHeaders);
+  return args.deps.fetchStrategy.fetchGet<T>(args.url, { extraHeaders });
+}
+
+/**
+ * Send the GraphQL document and return the raw envelope procedure.
+ * @param args - Bundled fireQuery arguments.
+ * @returns Procedure carrying the raw GraphQL envelope.
+ */
+async function sendQuery<T>(args: IFireQueryArgs): Promise<Procedure<IGraphQLEnvelope<T>>> {
+  const extraHeaders = mergeHeaders(args.rawAuth, args.extraHeaders);
+  const opts = { extraHeaders };
+  const { queryString, variables } = args;
+  return args.deps.graphqlStrategy.query<IGraphQLEnvelope<T>>(queryString, variables, opts);
 }
 
 /**
@@ -139,14 +207,10 @@ async function fireGet<T>(
  * @returns Unwrapped Procedure with the GraphQL data payload.
  */
 async function fireQuery<T>(args: IFireQueryArgs): Promise<Procedure<T>> {
-  const extraHeaders = mergeHeaders(args.rawAuth, args.extraHeaders);
-  const envelopeProc = await args.deps.graphqlStrategy.query<IGraphQLEnvelope<T>>(
-    args.queryString,
-    args.variables,
-    { extraHeaders },
-  );
+  const envelopeProc = await sendQuery<T>(args);
   if (!isOk(envelopeProc)) return envelopeProc;
-  return unwrapGraphql<T>(envelopeProc.value);
+  const operation = operationName(args.queryString);
+  return unwrapGraphql<T>(envelopeProc.value, operation);
 }
 
 export { appendQuery, buildHeaders, fireGet, firePost, fireQuery, mergeHeaders, NO_EXTRA_HEADERS };

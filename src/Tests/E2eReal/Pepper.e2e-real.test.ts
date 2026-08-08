@@ -1,18 +1,14 @@
 import { jest } from '@jest/globals';
 import * as dotenv from 'dotenv';
 
-import { CompanyTypes, createScraper } from '../../index.js';
+import { CompanyTypes } from '../../index.js';
 import type { ScraperCredentials } from '../../Scrapers/Base/Interface.js';
 import { getDebug } from '../../Scrapers/Pipeline/Types/Debug.js';
-import {
-  assertSuccessfulScrape,
-  BROWSER_ARGS,
-  defaultStartDate,
-  logScrapedTransactions,
-  SCRAPE_TIMEOUT,
-} from './Helpers.js';
+import { assertSuccessfulScrape, logScrapedTransactions, SCRAPE_TIMEOUT } from './Helpers.js';
 import { createBankOtpPoller } from './OtpPoller.js';
+import { createScrapeAttempt } from './ScrapeAttempt.js';
 import { createTokenCache } from './TokenCache.js';
+import { scrapeWithWarmFallback } from './WarmPathFallback.js';
 
 dotenv.config();
 
@@ -54,12 +50,15 @@ DESCRIBE_IF('E2E: Pepper (real credentials, config-driven)', () => {
       otpLongTermToken: cachedToken,
       otpCodeRetriever: retrieve,
     } as unknown as ScraperCredentials;
-    const coldCreds: ScraperCredentials = {
+    /**
+     * Build cold (SMS-OTP) credentials with a fresh OTP retriever.
+     * @returns Cold credential shape.
+     */
+    const buildColdCreds = (): ScraperCredentials => ({
       phoneNumber,
       password,
-      otpCodeRetriever: retrieve,
-    };
-    const creds: ScraperCredentials = cachedToken.length > 0 ? warmCreds : coldCreds;
+      otpCodeRetriever: createBankOtpPoller('Pepper', LOG),
+    });
     LOG.info(
       {
         cacheEnabled: cache.enabled,
@@ -68,14 +67,18 @@ DESCRIBE_IF('E2E: Pepper (real credentials, config-driven)', () => {
       },
       'Pepper creds shape',
     );
-    const scraper = createScraper({
+    const runScrape = createScrapeAttempt({
       companyId: CompanyTypes.Pepper,
-      startDate: defaultStartDate(),
-      shouldShowBrowser: false,
-      args: BROWSER_ARGS,
       onAuthFlowComplete: cache.writer,
     });
-    const result = await scraper.scrape(creds);
+    const result = await scrapeWithWarmFallback({
+      cache,
+      cachedToken,
+      warmCreds,
+      coldCreds: buildColdCreds,
+      attempt: runScrape,
+      log: LOG,
+    });
     if (!result.success) {
       LOG.error(
         { errorType: result.errorType, errorMessage: result.errorMessage },
