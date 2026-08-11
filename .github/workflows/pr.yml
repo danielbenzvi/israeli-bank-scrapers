@@ -7,8 +7,13 @@ on:
   # via a `pr-docs.yml` echo-shim. Folded in 2026-05-28 CI consolidation
   # (PR #275): the validate job now always runs, and `detect-changes`
   # below short-circuits the heavy steps when no src/** is touched.
-  push:
-    branches: [main]
+  #
+  # `push: main` was removed in the CI-DAG consolidation: re-running the
+  # whole PR suite after merge duplicated ~22 jobs that had already passed
+  # on the PR, and it was the main reason a merge produced a wall of
+  # hard-to-read check runs. Post-merge verification now lives in
+  # main-pipeline.yml. The required `Validate` context is a PR context and
+  # is unaffected by this.
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -230,6 +235,24 @@ jobs:
         with:
           globs: '*.md docs/**/*.md tasks/**/*.md'
           config: '.markdownlint.json'
+
+      # docs/compatibility.md is generated from compatibility.json. Regenerating
+      # here and diffing proves the committed page still matches its source, so
+      # upgrade notes cannot silently rot the way the 8.3.0 removal of the
+      # `OneZeroScraper` export did.
+      - name: Compatibility page is in sync
+        if: needs.changes.outputs.docs == 'true'
+        run: node scripts/build-compatibility.mjs --check
+
+      # Lychee (below) cannot check links into our own docs site — a PR
+      # that adds a page links to it before it is deployed, so every docs
+      # PR would fail. That exclusion left README links to the site
+      # unchecked entirely, and `/configuration/` sat 404-ing until a
+      # human noticed. This maps each site URL back to the docs/ page
+      # that must render it.
+      - name: Docs-site links resolve to a page
+        if: needs.changes.outputs.md == 'true' || needs.changes.outputs.docs == 'true'
+        run: bash .github/scripts/ci/check-docs-links.sh
 
       - name: Substitute {{BRANCH}} placeholders for Lychee
         if: needs.changes.outputs.md == 'true'

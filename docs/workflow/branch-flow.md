@@ -12,7 +12,7 @@
 
 Every commit subject must follow the Conventional Commits format:
 
-```
+```text
 <type>(<scope>): <subject>
 
 [optional body]
@@ -32,10 +32,13 @@ Every commit subject must follow the Conventional Commits format:
 
 1. Branch from `main`: `git checkout -b <type>/<short-name>`
 2. Make the change. Run `npm run test:unit` + `npm run lint` locally.
-3. Commit (the pre-commit hook runs the full 12 gates).
+3. Commit (the [pre-commit hook](pre-commit.md) runs the full gate suite).
 4. Push + open the PR. CI re-runs the same gates.
 5. Wait for `@sergienko4` (CODEOWNER) review.
 6. Squash-merge once approved + CI green. Commit subject must still be Conventional.
+7. Watch the [`Main Pipeline`](main-pipeline.md) run for the merge commit — one
+   run, one summary, covering CodeQL, SonarCloud, workflow security, docs and
+   the release.
 
 ## release-please cadence
 
@@ -44,7 +47,8 @@ Every commit subject must follow the Conventional Commits format:
     1. Bumps the version in `package.json`
     2. Updates `CHANGELOG.md`
     3. Tags the commit
-    4. Triggers the `npm-publish` workflow → publishes to npm as `@sergienko4/israeli-bank-scrapers@<new-version>`
+    4. Publishes to npm as `@sergienko4/israeli-bank-scrapers@<new-version>` from
+       the `Release` stage of that merge's [`Main Pipeline`](main-pipeline.md) run
 
 You don't manually edit `CHANGELOG.md` or `package.json` for versions — release-please owns both.
 
