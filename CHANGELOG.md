@@ -1,5 +1,12 @@
 # Changelog
 
+## [8.6.7](https://github.com/sergienko4/israeli-bank-scrapers/compare/v8.6.6...v8.6.7) (2026-08-12)
+
+
+### Bug Fixes
+
+* **ci:** pin the CodeQL analysis category ([#471](https://github.com/sergienko4/israeli-bank-scrapers/issues/471)) ([e5a64ca](https://github.com/sergienko4/israeli-bank-scrapers/commit/e5a64ca282c4b3047a9e72a18ac8fc9960bfe5ff))
+
 ## [8.6.6](https://github.com/sergienko4/israeli-bank-scrapers/compare/v8.6.5...v8.6.6) (2026-08-10)
 
 
