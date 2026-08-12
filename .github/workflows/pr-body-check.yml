@@ -29,29 +29,12 @@ jobs:
             // Bot-authored PRs (Dependabot, release-please) cannot generate the §10
             // guideline-compliance table by design. Exempt them so dependency bumps and
             // release PRs are not blocked from auto-merge. Human PRs remain enforced.
-            //
-            // Bot signals — ANY match exempts the PR:
-            //   - pull_request.user.login matches a known bot account
-            //   - pull_request.head.ref matches a known bot branch prefix
-            //     (release-please uses a human PAT, so user.login alone is unreliable)
+            // Shared with the cited-path check below so both gates exempt the same set.
+            const isBotPr = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/ci/is-bot-pr.cjs`);
             const pr = context.payload.pull_request;
-            const author = (pr.user && pr.user.login) || '';
-            const headRef = (pr.head && pr.head.ref) || '';
-            const BOT_AUTHORS = new Set([
-              'dependabot[bot]',
-              'release-please[bot]',
-              'github-actions[bot]',
-            ]);
-            const BOT_BRANCH_PREFIXES = [
-              'dependabot/',
-              'release-please--',
-            ];
-            const isBotPr =
-              BOT_AUTHORS.has(author) ||
-              BOT_BRANCH_PREFIXES.some((prefix) => headRef.startsWith(prefix));
-            if (isBotPr) {
+            if (isBotPr(pr)) {
               core.info(
-                `PR-body check skipped — bot-authored PR (author='${author}', head='${headRef}').`,
+                `PR-body check skipped — bot-authored PR (author='${pr.user?.login ?? ''}', head='${pr.head?.ref ?? ''}').`,
               );
               return;
             }
@@ -90,3 +73,41 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: node scripts/check-breaking-note.mjs
+
+      # Agent-facing docs cite repo-root-relative paths. CLAUDE.md is loaded
+      # by every agent session, and all seven of its "Key Files" entries went
+      # stale unnoticed when src/ was restructured - an agent that trusts a
+      # phantom path burns an investigation on a file that is not there.
+      # Unconditional, including bot PRs: a dependency bump that moves a file
+      # rots these citations exactly as a human PR would.
+      - name: Cited paths in agent docs resolve
+        run: npm run lint:doc-paths
+
+      # The PR body is checked separately because it is not a repo file.
+      # Written via github-script rather than interpolated into `run:` —
+      # `${{ github.event.pull_request.body }}` in a shell line is a script
+      # injection vector, since the body is attacker-controlled text.
+      - name: Stage PR body for path check
+        id: stage-body
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const fs = require('node:fs');
+            const isBotPr = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/ci/is-bot-pr.cjs`);
+            const pr = context.payload.pull_request;
+            // Bot bodies are generated changelogs citing paths across the whole
+            // history, including files since moved. Holding them to this gate
+            // would block release PRs for drift they did not introduce.
+            if (isBotPr(pr)) {
+              core.info(`PR-body path check skipped — bot PR (author='${pr.user?.login ?? ''}').`);
+              core.setOutput('skip', 'true');
+              return;
+            }
+            fs.writeFileSync('pr-body-ci.md', pr.body || '');
+            core.setOutput('skip', 'false');
+
+      - name: Cited paths in PR body resolve
+        if: steps.stage-body.outputs.skip != 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/check-doc-paths.mjs --diff-base "$BASE_SHA" pr-body-ci.md
