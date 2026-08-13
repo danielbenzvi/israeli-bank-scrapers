@@ -28,6 +28,16 @@ export interface IFetchPostOptions {
    * or non-positive means no timeout, i.e. the previous behaviour.
    */
   timeoutMs?: number;
+  /**
+   * Send the request the way the site's own SPA would.
+   *
+   * Adds a per-request trace identifier and, when absent, the client
+   * correlation cookie the front end sets on first load. Some endpoints answer
+   * a bare replayed POST with a challenge or a redirect even on a valid
+   * session, because the request does not look like it came from their own
+   * front end.
+   */
+  firstPartyContract?: boolean;
 }
 
 /**
@@ -62,6 +72,8 @@ interface IPostEvaluateArgs {
   innerExtraHeaders: Record<string, string>;
   /** Omitted entirely when the caller set no timeout, so the args shape is unchanged for them. */
   innerTimeoutMs?: number;
+  /** See IFetchPostOptions.firstPartyContract. */
+  innerFirstParty?: boolean;
 }
 
 /** What {@link doPostFetch} hands back across the page boundary. */
@@ -91,11 +103,19 @@ async function doPostFetch(args: IPostEvaluateArgs): Promise<PostEvaluateResult>
   // live evidence: run 15-05-2026 — hardcoded `Content-Type`
   // value collided with captured `content-type`; only the
   // captured value gets the API to 200.
+  const headers: Record<string, string> = { ...args.innerExtraHeaders };
+  if (args.innerFirstParty === true) {
+    headers['TraceIdentifier'] = globalThis.crypto.randomUUID();
+    const hasCorrelation = document.cookie.split(';').some((part): boolean => part.trim().startsWith('bckey='));
+    if (!hasCorrelation) {
+      document.cookie = `bckey=${globalThis.crypto.randomUUID()}; Max-Age=1800; Path=/; SameSite=Lax; Secure`;
+    }
+  }
   const response = await fetch(args.innerUrl, {
     method: 'POST',
     body: args.innerDataJson,
     credentials: 'include',
-    headers: { ...args.innerExtraHeaders },
+    headers,
     signal:
       args.innerTimeoutMs !== undefined && args.innerTimeoutMs > 0
         ? AbortSignal.timeout(args.innerTimeoutMs)
@@ -219,6 +239,7 @@ function buildPostArgs(url: string, opts: IFetchPostOptions): IPostEvaluateArgs 
     // Spread conditionally: a caller that sets no timeout gets exactly the
     // args object it got before this option existed.
     ...(timeoutMs !== undefined && timeoutMs > 0 ? { innerTimeoutMs: timeoutMs } : {}),
+    ...(opts.firstPartyContract === true ? { innerFirstParty: true } : {}),
   };
 }
 

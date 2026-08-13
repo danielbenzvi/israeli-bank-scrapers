@@ -3,6 +3,7 @@
  * Returns Procedure<T> (never null/undefined).
  */
 
+import type { IPostWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPost.js';
 import type { Procedure } from '../../Types/Procedure.js';
 
 /**
@@ -22,6 +23,20 @@ interface IFetchOpts {
    * about cookies (the non-Pepper default).
    */
   readonly onSetCookie?: OnSetCookie;
+  /**
+   * Abort the request after this many milliseconds. Absent or non-positive
+   * means no timeout — the previous behaviour for every caller.
+   */
+  readonly timeoutMs?: number;
+  /**
+   * Send the request the way the site's own SPA would: a per-request trace
+   * identifier and the client-correlation cookie it sets on first load.
+   *
+   * Some endpoints answer a bare replayed POST with a challenge or a redirect
+   * even on a valid session, because the request does not look like it came
+   * from their own front end.
+   */
+  readonly firstPartyContract?: boolean;
 }
 
 /** Default fetch options — no extra headers. */
@@ -37,7 +52,23 @@ interface IFetchStrategy {
 
   /** GET with optional extra headers. */
   fetchGet<T>(url: string, opts: IFetchOpts): Promise<Procedure<T>>;
+
+  /**
+   * POST returning transport metadata alongside the body.
+   *
+   * Optional because only an in-page strategy can observe redirects, the final
+   * URL and the content type — a caller must therefore handle its absence
+   * rather than assume it. Present, it lets a caller tell a challenge or an
+   * expired session (a 200 carrying HTML, or a bounce to a login origin) apart
+   * from a genuinely empty result, which `fetchPost` collapses to the same
+   * value.
+   */
+  fetchPostWithMetadata?(
+    url: string,
+    data: PostData,
+    opts: IFetchOpts,
+  ): Promise<Procedure<IPostWithMetadata>>;
 }
 
-export type { IFetchOpts, IFetchStrategy, OnSetCookie, PostData };
+export type { IFetchOpts, IFetchStrategy, IPostWithMetadata, OnSetCookie, PostData };
 export { DEFAULT_FETCH_OPTS };
