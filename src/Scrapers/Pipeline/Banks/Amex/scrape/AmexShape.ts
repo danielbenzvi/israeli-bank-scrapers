@@ -26,6 +26,7 @@ import {
   noVars,
   primeUrl,
 } from './AmexShapeHelpers.js';
+import { enrichAmexRows } from './AmexShapeEnrich.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './AmexShapeTxns.js';
 
 /**
@@ -71,6 +72,8 @@ const AMEX_SHAPE: IApiDirectScrapeShape<IAmexCard, number> = {
   accountNumberOf,
   // A card issuer: charges arrive positive and the mapper flips them.
   isCardIssuer: true,
+  // Per-transaction detail, when the caller configures it. No-op otherwise.
+  enrichRows: enrichAmexRows,
   prime: { navUrl: primeUrl },
   customer: {
     buildVars: customerVars,
