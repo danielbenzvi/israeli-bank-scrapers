@@ -318,7 +318,15 @@ function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const type = isInstallmentTransaction(input.raw, restored.installments)
     ? TransactionTypes.Installments
     : base.type;
-  return { ...base, ...resolveTxnSuffix(input.fields), ...restored, type };
+  const provenance = input.raw?.['__rowProvenance'];
+  // Surfaced generically: any shape that attached provenance to a row gets it
+  // back on the mapped transaction, alongside whatever its enrichment recorded.
+  // The mapper names no bank — it only forwards what it was given.
+  const rawTransaction =
+    provenance === undefined
+      ? undefined
+      : { ...(provenance as Record<string, unknown>), detailOutcome: input.raw?.['__detailOutcome'] };
+  return { ...base, ...resolveTxnSuffix(input.fields), ...restored, type, rawTransaction };
 }
 
 /**
