@@ -298,7 +298,24 @@ function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const base = buildTxnBase(input);
   const restored = restoreProviderFields(input.raw, base.type);
   const suffix = resolveTxnSuffix(input.fields);
-  return { ...base, ...suffix, ...resolveTxnEnrichment(input.fields), ...restored };
+  const rawTransaction = resolveRowProvenance(input.raw);
+  return { ...base, ...suffix, ...resolveTxnEnrichment(input.fields), ...restored, rawTransaction };
+}
+
+/**
+ * Forward whatever provenance a shape attached to a raw row.
+ *
+ * Surfaced generically: any shape that recorded where a row came from, or what
+ * a per-transaction detail pass made of it, gets that back on the mapped
+ * transaction. The mapper names no bank — it only forwards what it was given.
+ *
+ * @param raw - Raw transaction record.
+ * @returns The provenance bundle, or undefined when the shape attached none.
+ */
+function resolveRowProvenance(raw: ApiRecord): Record<string, unknown> | undefined {
+  const provenance = raw?.['__rowProvenance'];
+  if (provenance === undefined) return undefined;
+  return { ...(provenance as Record<string, unknown>), detailOutcome: raw?.['__detailOutcome'] };
 }
 
 /**
