@@ -68,6 +68,14 @@ export interface IAmexRowProvenance {
   readonly amountField?: string;
   /** That key's value, before any normalisation. */
   readonly rawAmount?: unknown;
+  /**
+   * Fields a consumer needs to judge direction and settlement for itself,
+   * carried verbatim because the merged row is otherwise the only place they
+   * exist and mapping discards them.
+   */
+  readonly dealSumType?: unknown;
+  readonly rawStatus?: unknown;
+  readonly rawDirection?: unknown;
 }
 
 /** Row shape after {@link mergeAmexRows}, carrying its own provenance. */
@@ -101,6 +109,9 @@ function withProvenance(raw: AmexTxn, rowClass: AmexRowClass): AmexRowWithProven
     __rowProvenance: {
       rowClass,
       ...(amountField === undefined ? {} : { amountField, rawAmount: raw[amountField] }),
+      dealSumType: raw['dealSumType'],
+      rawStatus: raw['status'],
+      rawDirection: raw['creditDebit'] ?? raw['direction'] ?? raw['debitCreditIndicator'],
     },
   };
 }
