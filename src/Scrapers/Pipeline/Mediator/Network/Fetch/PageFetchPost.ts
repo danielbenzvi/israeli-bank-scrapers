@@ -26,6 +26,40 @@ export interface IFetchPostOptions {
   data: Record<string, JsonValue> | readonly JsonValue[];
   extraHeaders?: Record<string, string>;
   shouldIgnoreErrors?: boolean;
+  /**
+   * Override the in-page request deadline, in milliseconds.
+   *
+   * Every in-page POST is already bounded by `NETWORK_FETCH_PAGE_TIMEOUT_MS`;
+   * this narrows that budget for a caller that issues many requests under one
+   * wall-clock ceiling and must know what each one may cost. Omitted or
+   * non-positive keeps the library-wide default.
+   */
+  timeoutMs?: number;
+}
+
+/**
+ * Transport-level facts about a response, independent of its body.
+ *
+ * These are the signals that distinguish "the provider returned no data" from
+ * "we were bounced": a WAF challenge and an expired session both commonly
+ * arrive as a 200 carrying HTML, or as a redirect to a login origin. Parsed as
+ * JSON, both yield `null` — the same value a genuinely empty result gives —
+ * so without this a caller cannot tell an authentication failure from an empty
+ * account.
+ */
+export interface IResponseMetadata {
+  status: number;
+  contentType: string;
+  redirected: boolean;
+  /** False when the response came from a different origin than requested. */
+  sameOrigin: boolean;
+}
+
+/** A response returned as transport metadata plus its body, if it parsed. */
+export interface IPostWithMetadata {
+  http: IResponseMetadata;
+  /** Parsed JSON body, or null when the response was not usable JSON. */
+  envelope: unknown;
 }
 
 /** Arguments for POST requests via Playwright's API client. */
@@ -167,7 +201,13 @@ function withJsonContentType(extraHeaders?: Record<string, string>): Record<stri
 function buildPostArgs(url: string, opts: IFetchPostOptions): IPostEvaluateArgs {
   const innerExtraHeaders = withJsonContentType(opts.extraHeaders);
   const innerDataJson = JSON.stringify(opts.data);
-  const timeoutMs = NETWORK_FETCH_PAGE_TIMEOUT_MS;
+  // The caller's budget only ever NARROWS the library-wide deadline: a request
+  // is never left unbounded, and a caller that sets nothing is unaffected.
+  const requested = opts.timeoutMs;
+  const timeoutMs =
+    requested !== undefined && requested > 0
+      ? Math.min(requested, NETWORK_FETCH_PAGE_TIMEOUT_MS)
+      : NETWORK_FETCH_PAGE_TIMEOUT_MS;
   return { innerUrl: url, innerDataJson, innerExtraHeaders, timeoutMs };
 }
 
@@ -214,4 +254,65 @@ export async function fetchPostWithinPage<TResult>(
   const postArgs = buildPostArgs(url, opts);
   const response = await runPostEvaluate(page, postArgs);
   return finalisePagePost<TResult>({ response, url, startMs, opts });
+}
+
+/**
+ * True when a response is worth attempting to parse as JSON.
+ *
+ * A redirected response is excluded even at 2xx: landing on a login or
+ * challenge origin is the single most common way a scrape "succeeds" while
+ * returning nothing usable, and parsing it would erase that distinction.
+ *
+ * @param meta - Transport metadata for the response.
+ * @returns True when the body should be parsed.
+ */
+function isParseableJson(meta: IResponseMetadata): boolean {
+  if (meta.redirected) return false;
+  if (meta.status < 200 || meta.status >= 300) return false;
+  return meta.contentType.toLowerCase().includes('application/json');
+}
+
+/**
+ * Perform a POST inside the page and return transport metadata alongside the
+ * body, instead of the body alone.
+ *
+ * Separate from {@link fetchPostWithinPage} rather than a flag on it, so the
+ * two return types stay honest: this one never collapses a failure into
+ * `null`, which is the entire reason to call it.
+ *
+ * @param page - The Playwright page or frame context.
+ * @param url - The URL to post to.
+ * @param opts - Request body, optional extra headers, timeout.
+ * @returns Transport metadata plus the parsed body, or a null body when the
+ *   response was not usable JSON.
+ */
+export async function fetchPostWithinPageWithMetadata(
+  page: Page | Frame,
+  url: string,
+  opts: IFetchPostOptions,
+): Promise<IPostWithMetadata> {
+  const startMs = Date.now();
+  const postArgs = buildPostArgs(url, opts);
+  const [text, status, contentType, redirected, finalUrl] = await runPostEvaluate(page, postArgs);
+  logApiCall(`POST(page) ${redactUrlFull(url).slice(-100)}`, status, Date.now() - startMs);
+  logResponseIssues(status, text, url);
+  const http: IResponseMetadata = {
+    status,
+    contentType,
+    redirected,
+    sameOrigin: new URL(finalUrl).origin === new URL(url).origin,
+  };
+  // 204 is a successful empty response, and servers routinely omit a
+  // content-type on it. Answered before the JSON gate so "succeeded with no
+  // content" stays distinguishable from "could not be read" — which is the
+  // distinction this whole function exists to preserve.
+  if (status === 204) return { http, envelope: {} };
+  if (!isParseableJson(http)) return { http, envelope: null };
+  try {
+    return { http, envelope: text === '' ? {} : JSON.parse(text) };
+  } catch {
+    // A body that claimed JSON and was not is a transport-level anomaly, not a
+    // parse error to raise: the metadata already records what happened.
+    return { http, envelope: null };
+  }
 }
