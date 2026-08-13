@@ -9,7 +9,14 @@ import { resolveWkUrl } from '../../Registry/WK/UrlsWK.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { isOk } from '../../Types/Procedure.js';
 import { retryOn401Op } from './ApiMediator.retry.js';
-import { fireGet, firePost, fireQuery, NO_EXTRA_HEADERS } from './ApiMediator.transport.js';
+import {
+  fireGet,
+  firePost,
+  firePostWithMetadata,
+  fireQuery,
+  NO_EXTRA_HEADERS,
+} from './ApiMediator.transport.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type {
   IApiCallContext,
   IApiPostOpArgs,
@@ -25,11 +32,16 @@ import type {
  */
 function buildFirePostExtras(
   args: IApiPostOpArgs,
-): Pick<IFirePostArgs, 'extraHeaders' | 'query' | 'onSetCookie'> {
+): Pick<
+  IFirePostArgs,
+  'extraHeaders' | 'query' | 'onSetCookie' | 'timeoutMs' | 'firstPartyContract'
+> {
   return {
     extraHeaders: args.opts?.extraHeaders ?? NO_EXTRA_HEADERS,
     query: args.opts?.query ?? NO_EXTRA_HEADERS,
     onSetCookie: args.opts?.onSetCookie,
+    timeoutMs: args.opts?.timeoutMs,
+    firstPartyContract: args.opts?.firstPartyContract,
   };
 }
 
@@ -73,6 +85,17 @@ function makeApiPostFireOnce<T>(
  * @param args - apiPost op args.
  * @returns Procedure with typed payload.
  */
+async function apiPostWithMetadataOp(args: IApiPostOpArgs): Promise<Procedure<IPostWithMetadata>> {
+  const urlProc = resolveWkUrl(args.wkUrl, args.ctx.bankHint);
+  if (!isOk(urlProc)) return urlProc;
+  // Same retry-on-401 wrapper as apiPost: an expired token is a transport
+  // concern and is refreshed identically whether or not the caller wanted
+  // metadata back.
+  const fire = async (): Promise<Procedure<IPostWithMetadata>> =>
+    firePostWithMetadata(buildFirePostArgs(args, urlProc.value));
+  return retryOn401Op<IPostWithMetadata>({ state: args.ctx.state, fire });
+}
+
 async function apiPostOp<T>(args: IApiPostOpArgs): Promise<Procedure<T>> {
   const urlProc = resolveWkUrl(args.wkUrl, args.ctx.bankHint);
   if (!isOk(urlProc)) return urlProc;
@@ -152,4 +175,4 @@ async function apiQueryOp<T>(args: IApiQueryOpArgs): Promise<Procedure<T>> {
   return retryOn401Op<T>({ state: args.ctx.state, fire });
 }
 
-export { apiGetOp, apiPostOp, apiQueryOp };
+export { apiGetOp, apiPostOp, apiPostWithMetadataOp, apiQueryOp };
