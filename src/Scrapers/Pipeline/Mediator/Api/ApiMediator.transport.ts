@@ -4,7 +4,7 @@
  */
 
 import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
-import type { PostData } from '../../Strategy/Fetch/FetchStrategy.js';
+import type { IPostWithMetadata, PostData } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, isOk, succeed } from '../../Types/Procedure.js';
 import type {
@@ -175,8 +175,44 @@ async function firePost<T>(args: IFirePostArgs): Promise<Procedure<T>> {
   const headers = mergeHeaders(args.rawAuth, args.extraHeaders);
   const payload = toPostData(args.body);
   const finalUrl = appendQuery(args.url, args.query);
-  const fetchOpts = { extraHeaders: headers, onSetCookie: args.onSetCookie };
+  const fetchOpts = {
+    extraHeaders: headers,
+    onSetCookie: args.onSetCookie,
+    timeoutMs: args.timeoutMs,
+    firstPartyContract: args.firstPartyContract,
+  };
   return args.deps.fetchStrategy.fetchPost<T>(finalUrl, payload, fetchOpts);
+}
+
+/**
+ * POST returning transport metadata alongside the body.
+ *
+ * Fails rather than silently degrading when the configured strategy cannot
+ * provide metadata: a caller asks for this precisely because it needs to tell
+ * a challenge apart from an empty result, and quietly answering without the
+ * metadata would defeat the reason it asked.
+ *
+ * @param args - Bundled firePost arguments.
+ * @returns Procedure carrying transport metadata plus the parsed body.
+ */
+async function firePostWithMetadata(args: IFirePostArgs): Promise<Procedure<IPostWithMetadata>> {
+  const withMetadata = args.deps.fetchStrategy.fetchPostWithMetadata;
+  if (withMetadata === undefined) {
+    return fail(
+      ScraperErrorTypes.Generic,
+      'the configured fetch strategy cannot return response metadata',
+    );
+  }
+  const headers = mergeHeaders(args.rawAuth, args.extraHeaders);
+  const payload = toPostData(args.body);
+  const finalUrl = appendQuery(args.url, args.query);
+  const fetchOpts = {
+    extraHeaders: headers,
+    onSetCookie: args.onSetCookie,
+    timeoutMs: args.timeoutMs,
+    firstPartyContract: args.firstPartyContract,
+  };
+  return withMetadata.call(args.deps.fetchStrategy, finalUrl, payload, fetchOpts);
 }
 
 /**
@@ -213,4 +249,13 @@ async function fireQuery<T>(args: IFireQueryArgs): Promise<Procedure<T>> {
   return unwrapGraphql<T>(envelopeProc.value, operation);
 }
 
-export { appendQuery, buildHeaders, fireGet, firePost, fireQuery, mergeHeaders, NO_EXTRA_HEADERS };
+export {
+  appendQuery,
+  buildHeaders,
+  fireGet,
+  firePost,
+  firePostWithMetadata,
+  fireQuery,
+  mergeHeaders,
+  NO_EXTRA_HEADERS,
+};
