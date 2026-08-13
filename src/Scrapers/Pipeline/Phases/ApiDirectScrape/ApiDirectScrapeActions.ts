@@ -61,7 +61,13 @@ async function fetchAccountTxns<TAcct, TCursor>(
   const stop = buildStop(a);
   const paged = await fetchPaginated<object, TCursor>({ fetchPage, stop });
   if (!isOk(paged)) return paged;
-  const mapped = mapTxns(paged.value, a.shape.isCardIssuer);
+  // Enrichment runs before mapping so anything it adds is visible to the
+  // mapper. Shapes that declare no hook pay nothing.
+  const rows =
+    a.shape.enrichRows === undefined
+      ? paged.value
+      : await a.shape.enrichRows(paged.value, { acct: a.acct, ctx: a.ctx, bus: a.bus });
+  const mapped = mapTxns(rows, a.shape.isCardIssuer);
   return succeed(mapped);
 }
 
