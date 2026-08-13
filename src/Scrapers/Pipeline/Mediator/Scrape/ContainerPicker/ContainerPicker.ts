@@ -76,7 +76,7 @@ function extractTransactions(responseBody: ApiRecord): readonly ITransaction[] {
   const hunted = huntTransactions(inner);
   const items = normalizeBancsRecords(hunted);
   const valid = items.filter((r): boolean => !isVoidedTransaction(r));
-  const mapped = valid.map(autoMapTransaction);
+  const mapped = valid.map((raw): ReturnType<typeof autoMapTransaction> => autoMapTransaction(raw));
   const kept = mapped.filter((t): t is ITransaction => t !== false);
   LOG.debug({ message: buildHuntSummary(items.length, valid.length, kept.length) });
   return kept;
@@ -120,7 +120,7 @@ function filterByCardIndex(body: ApiRecord, cardId: string): readonly ITransacti
     (item): boolean => !isVoidedTransaction(item) && String(item.cardIndex) === cardId,
   );
   if (matched.length === 0) return [];
-  const mapped = matched.map(autoMapTransaction);
+  const mapped = matched.map((raw): ReturnType<typeof autoMapTransaction> => autoMapTransaction(raw));
   return mapped.filter((t): t is ITransaction => t !== false);
 }
 

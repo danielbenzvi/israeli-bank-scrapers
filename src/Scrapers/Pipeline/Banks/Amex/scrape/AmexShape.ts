@@ -55,6 +55,8 @@ function digitalV3Headers(): HeaderMap {
 const AMEX_SHAPE: IApiDirectScrapeShape<IAmexCard, number> = {
   stepName: 'AmexScrape',
   accountNumberOf,
+  // A card issuer: charges arrive positive and the mapper flips them.
+  isCardIssuer: true,
   prime: { navUrl: primeUrl },
   customer: {
     buildVars: customerVars,
