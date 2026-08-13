@@ -70,17 +70,28 @@ function isVoidedTransaction(raw: ApiRecord): boolean {
 }
 
 /**
- * Negate amount for card transactions (charges are debits).
- * Isracard/Amex report positive amounts for charges — old scraper
- * negates them.
+ * Flip a card issuer's sign convention to the caller-facing one.
+ *
+ * Card issuers report a charge as a positive number — "you owe 122.17" — while
+ * consumers expect spend to be negative. So the sign is INVERTED, not forced.
+ *
+ * `-Math.abs(amount)` was wrong: a refund arrives from the issuer as a negative
+ * number, and forcing the sign turned it straight back into a charge. A real
+ * Max statement carrying a charge and its later refund produced two charges, so
+ * the refunded money never returned to any total. Inverting handles both
+ * directions, and matches what the per-institution scrapers in the original
+ * `israeli-bank-scrapers` do (`chargedAmount: -actualPaymentAmount`).
+ *
  * @param amount - Raw amount from API.
  * @param isCardTxn - Whether this is a card company transaction.
- * @returns Negated amount for cards, original for banks.
+ * @returns Sign-inverted amount for cards, original for banks.
  */
 function maybeNegateAmount(amount: number, isCardTxn: boolean): number {
   if (!isCardTxn) return amount;
+  // Guarded so zero cannot become -0, which serialises as "-0" and is unequal
+  // to a stored 0 under Object.is.
   if (amount === 0) return 0;
-  return -Math.abs(amount);
+  return -amount;
 }
 
 /**

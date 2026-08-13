@@ -58,9 +58,12 @@ describe('charge sign by declared institution', () => {
     expect(Object.is(mapped({ ...CHARGE, amount: 0 }, true).chargedAmount, -0)).toBe(false);
   });
 
-  it('does not re-flip an already-negative amount', () => {
-    // The flip is "make it a debit", not "negate": a credit-side row that
-    // already arrives negative must not bounce back to positive.
-    expect(mapped({ ...CHARGE, amount: -50 }, true).chargedAmount).toBe(-50);
+  it('turns a refund back into money returned, rather than another charge', () => {
+    // This test previously asserted the opposite, and was wrong. An issuer
+    // reports a refund as a negative number; forcing the sign with
+    // `-Math.abs()` made it a charge, so a purchase and its refund both counted
+    // as spend and the money never came back in any total. Caught on a real Max
+    // statement carrying a charge and its later refund for the same amount.
+    expect(mapped({ ...CHARGE, amount: -401.55 }, true).chargedAmount).toBe(401.55);
   });
 });
