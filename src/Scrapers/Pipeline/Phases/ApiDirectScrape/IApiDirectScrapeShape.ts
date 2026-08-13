@@ -219,6 +219,25 @@ export interface IApiDirectScrapeShape<TAcct, TCursor> {
   readonly stepName: string;
   readonly accountNumberOf: (acct: TAcct) => string;
   /**
+   * True for a credit-card issuer, false or absent for a bank account.
+   *
+   * Card issuers report a charge as a POSITIVE number — "you owe 122.17" —
+   * while a bank reports the same movement as negative. The mapper flips the
+   * sign for the former and leaves the latter alone, so it has to know which
+   * it is looking at.
+   *
+   * This is a fact about the INSTITUTION, which is why it is declared here
+   * instead of sniffed from the payload. The mapper used to infer it from the
+   * presence of a `dealSumType` field, which only some issuers send: every
+   * other card issuer was silently treated as a bank, and its charges came out
+   * positive — recorded as money received rather than spent. Nothing failed
+   * and no row was dropped; the amounts were simply inverted.
+   *
+   * Optional so every existing shape keeps its current behaviour: absent means
+   * "not a card issuer", which is what a bank shape wants.
+   */
+  readonly isCardIssuer?: boolean;
+  /**
    * Optional post-login prime navigation — see {@link IApiDirectScrapePrime}.
    * Absent ⇒ no prime (cookie-only session banks + headless banks).
    */

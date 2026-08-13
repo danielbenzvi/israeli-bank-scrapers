@@ -34,6 +34,8 @@ function balanceZero(): number {
 const MAX_SHAPE: IApiDirectScrapeShape<IMaxCard, number> = {
   stepName: 'MaxScrape',
   accountNumberOf,
+  // A card issuer: charges arrive positive and the mapper flips them.
+  isCardIssuer: true,
   customer: {
     buildVars: noVars,
     extractAccounts: extractCards,

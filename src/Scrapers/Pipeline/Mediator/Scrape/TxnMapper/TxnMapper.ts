@@ -316,13 +316,20 @@ function rejectMappedTxn(dateStr: string, amtNum: number): false {
  * extractor can drop the record with a LOUD log instead of letting
  * an empty-date / NaN-amount txn propagate silently.
  * @param raw - Raw transaction record from API response.
+ * @param isCardIssuer - Whether the institution is a card issuer, so charges
+ *   need their sign flipped. Falls back to a payload sniff when omitted.
  * @returns Mapped transaction, or false on malformed record.
  */
-function autoMapTransaction(raw: ApiRecord): ITransaction | false {
+function autoMapTransaction(raw: ApiRecord, isCardIssuer?: boolean): ITransaction | false {
   const fields = extractRawTxnFields(raw);
   const dateStr = coerceString(fields.date, parseAutoDate);
   const procStr = coerceString(fields.processedDate, parseAutoDate, dateStr);
-  const isCard = Boolean(fields.voidField);
+  // Prefer what the institution declares. The `voidField` fallback is the
+  // original inference and is kept only for callers that pass nothing: it
+  // detects a field only some issuers send, so it silently answers "bank" for
+  // every other card issuer and leaves their charges positive — i.e. recorded
+  // as money received. See IApiDirectScrapeShape.isCardIssuer.
+  const isCard = isCardIssuer ?? Boolean(fields.voidField);
   const amounts = computeAmounts(raw, fields, isCard);
   if (!isMappableTxn(dateStr, amounts.amtNum)) return rejectMappedTxn(dateStr, amounts.amtNum);
   return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields });
