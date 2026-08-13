@@ -7,6 +7,7 @@ import type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.
 import type { IOutputDataOptions } from './Interfaces/OutputDataOptions.js';
 import type { IScraperLoginResult } from './Interfaces/ScraperLoginResult.js';
 import type { IScraperScrapingResult } from './Interfaces/ScraperScrapingResult.js';
+import type { IAmexDetailOptions } from '../Pipeline/Banks/Amex/scrape/AmexDetailEnrich.js';
 
 export type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.js';
 export type { IErrorResult } from './Interfaces/ErrorResult.js';
@@ -189,6 +190,20 @@ export type ScraperOptions = ScraperBrowserOptions & {
    * @default 180000 (3 minutes)
    */
   otpTimeoutMs?: number;
+
+  /**
+   * Amex only — fetch per-transaction detail during the scrape.
+   *
+   * Each enriched transaction costs one extra authenticated request against a
+   * rate-limited endpoint, so the pass is bounded by row count, wall clock and
+   * a paced delay, and abandons itself on throttling or an expired session.
+   * Absent or disabled means no extra requests at all.
+   *
+   * Identity is keyed: the caller supplies an HMAC key and its own card
+   * aliases, so nothing here can be correlated back to a card without that
+   * key. See IAmexDetailOptions.
+   */
+  amexDetail?: IAmexDetailOptions;
 
   /**
    * Login chain log verbosity.
