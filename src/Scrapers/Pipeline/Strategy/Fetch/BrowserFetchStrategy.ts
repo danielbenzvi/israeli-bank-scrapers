@@ -18,13 +18,14 @@ import {
   fetchGetWithinPageWithHeaders,
   fetchPostWithinPage,
 } from '../../Mediator/Network/Fetch/index.js';
+import { fetchPostWithinPageWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPost.js';
 import { TimeoutError } from '../../Mediator/Timing/TimingActions.js';
 import type { Brand } from '../../Types/Brand.js';
 import { toErrorMessage } from '../../Types/ErrorUtils.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, failWithDetails, succeed } from '../../Types/Procedure.js';
 import { hasCookieSentinel, substituteCookieHeaders } from './CookieHeaderSentinel.js';
-import type { IFetchOpts, IFetchStrategy } from './FetchStrategy.js';
+import type { IFetchOpts, IFetchStrategy, IPostWithMetadata } from './FetchStrategy.js';
 
 type IsTargetFrame = Brand<boolean, 'IsTargetFrame'>;
 
@@ -126,8 +127,37 @@ class BrowserFetchStrategy implements IFetchStrategy {
   ): Promise<Procedure<T>> {
     const ctx = resolveContext(this._page, url);
     const extraHeaders = await this.resolveHeaders(url, opts.extraHeaders);
-    return fetchPostWithinPage<T>(ctx, url, { data, extraHeaders })
+    return fetchPostWithinPage<T>(ctx, url, { data, extraHeaders, timeoutMs: opts.timeoutMs })
       .then((result): Procedure<T> => resultToProcedure(result, url))
+      .catch(catchError);
+  }
+
+  /**
+   * POST via the browser page session, preserving transport metadata.
+   *
+   * Never collapses an unusable response to null the way {@link fetchPost}
+   * does — the metadata is the whole point, so the caller can distinguish a
+   * challenge or an expired session from an empty result.
+   *
+   * @param url - Target URL.
+   * @param data - POST body.
+   * @param opts - Fetch config (extraHeaders, timeout, first-party contract).
+   * @returns Procedure carrying transport metadata plus the parsed body.
+   */
+  public async fetchPostWithMetadata(
+    url: string,
+    data: Record<string, string>,
+    opts: IFetchOpts,
+  ): Promise<Procedure<IPostWithMetadata>> {
+    const ctx = resolveContext(this._page, url);
+    const extraHeaders = await this.resolveHeaders(url, opts.extraHeaders);
+    return fetchPostWithinPageWithMetadata(ctx, url, {
+      data,
+      extraHeaders,
+      timeoutMs: opts.timeoutMs,
+      firstPartyContract: opts.firstPartyContract,
+    })
+      .then((result): Procedure<IPostWithMetadata> => succeed(result))
       .catch(catchError);
   }
 

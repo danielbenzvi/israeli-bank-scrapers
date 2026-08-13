@@ -35,6 +35,16 @@ export interface IFetchPostOptions {
    * non-positive keeps the library-wide default.
    */
   timeoutMs?: number;
+  /**
+   * Send the request the way the site's own SPA would.
+   *
+   * Adds a per-request trace identifier and, when absent, the client
+   * correlation cookie the front end sets on first load. Some endpoints answer
+   * a bare replayed POST with a challenge or a redirect even on a valid
+   * session, because the request does not look like it came from their own
+   * front end.
+   */
+  firstPartyContract?: boolean;
 }
 
 /**
@@ -68,6 +78,8 @@ interface IPostEvaluateArgs {
   innerDataJson: string;
   innerExtraHeaders: Record<string, string>;
   timeoutMs: number;
+  /** See IFetchPostOptions.firstPartyContract. */
+  innerFirstParty?: boolean;
 }
 
 /**
@@ -87,7 +99,14 @@ async function doPostFetch(args: IPostEvaluateArgs): Promise<PageFetchTuple> {
   // live evidence: run 15-05-2026 — hardcoded `Content-Type`
   // value collided with captured `content-type`; only the
   // captured value gets the API to 200.
-  const headers = { ...args.innerExtraHeaders };
+  const headers: Record<string, string> = { ...args.innerExtraHeaders };
+  if (args.innerFirstParty === true) {
+    headers['TraceIdentifier'] = globalThis.crypto.randomUUID();
+    const hasCorrelation = document.cookie.split(';').some((part): boolean => part.trim().startsWith('bckey='));
+    if (!hasCorrelation) {
+      document.cookie = `bckey=${globalThis.crypto.randomUUID()}; Max-Age=1800; Path=/; SameSite=Lax; Secure`;
+    }
+  }
   const signal = AbortSignal.timeout(args.timeoutMs);
   const init = { method: 'POST', body: args.innerDataJson, credentials: 'include' as const };
   const response = await fetch(args.innerUrl, { ...init, headers, signal });
@@ -208,7 +227,13 @@ function buildPostArgs(url: string, opts: IFetchPostOptions): IPostEvaluateArgs 
     requested !== undefined && requested > 0
       ? Math.min(requested, NETWORK_FETCH_PAGE_TIMEOUT_MS)
       : NETWORK_FETCH_PAGE_TIMEOUT_MS;
-  return { innerUrl: url, innerDataJson, innerExtraHeaders, timeoutMs };
+  return {
+    innerUrl: url,
+    innerDataJson,
+    innerExtraHeaders,
+    timeoutMs,
+    ...(opts.firstPartyContract === true ? { innerFirstParty: true } : {}),
+  };
 }
 
 /** Bundled args for {@link finalisePagePost} — keeps the sig under max-params. */
