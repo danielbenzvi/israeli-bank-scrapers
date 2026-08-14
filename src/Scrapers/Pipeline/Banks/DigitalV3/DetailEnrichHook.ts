@@ -8,20 +8,34 @@
  * remains testable without any of them.
  */
 
-import type { IEnrichRowsContext } from '../../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
-import type { IApiMediator } from '../../../Mediator/Api/ApiMediator.types.js';
-import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
-import type { Procedure } from '../../../Types/Procedure.js';
-import { fail } from '../../../Types/Procedure.js';
-import { ScraperErrorTypes } from '../../../../Base/ErrorTypes.js';
-import { enrichAmexDetail } from './AmexDetailEnrich.js';
-import { literalUrl } from '../../../Registry/WK/UrlsWK.js';
-import { AMEX_API, type IAmexCard } from './AmexShapeHelpers.js';
+import type { IEnrichRowsContext } from '../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
+import type { IApiMediator } from '../../Mediator/Api/ApiMediator.types.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
+import type { Procedure } from '../../Types/Procedure.js';
+import { fail } from '../../Types/Procedure.js';
+import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
+import { enrichCardDetail } from './DetailEnrich.js';
+import { literalUrl } from '../../Registry/WK/UrlsWK.js';
 
-/** The per-transaction detail endpoint, branded as an inline literal URL. */
-const DETAIL_URL = literalUrl(
-  `${AMEX_API}/ocp/transactiondetails/DigitalV3.TransactionDetails/GetTransactionDetails`,
-);
+/** A card as both DigitalV3 banks describe it — the shapes are identical. */
+export interface IDigitalV3Card {
+  readonly cardSuffix: string;
+  readonly companyCode: string;
+}
+
+/**
+ * The per-transaction detail endpoint for a DigitalV3 host.
+ *
+ * Isracard and Amex are one company and share this backbone, differing only
+ * by domain — which is why this whole module is host-parameterised rather than
+ * duplicated per bank.
+ *
+ * @param apiHost - The bank's API origin.
+ * @returns The detail endpoint, branded as an inline literal URL.
+ */
+function detailUrl(apiHost: string) {
+  return literalUrl(`${apiHost}/ocp/transactiondetails/DigitalV3.TransactionDetails/GetTransactionDetails`);
+}
 
 /** JSON content negotiation for the detail POST. */
 const DETAIL_HEADERS: Record<string, string> = {
@@ -42,13 +56,14 @@ const DETAIL_HEADERS: Record<string, string> = {
  */
 function bindDetailPost(
   bus: IApiMediator,
+  apiHost: string,
 ): (body: Record<string, unknown>, timeoutMs: number) => Promise<Procedure<IPostWithMetadata>> {
   return async (body, timeoutMs): Promise<Procedure<IPostWithMetadata>> => {
     const post = bus.apiPostWithMetadata;
     if (post === undefined) {
       return fail(ScraperErrorTypes.Generic, 'detail enrichment needs a metadata-capable mediator');
     }
-    return post(DETAIL_URL, body, {
+    return post(detailUrl(apiHost), body, {
       extraHeaders: DETAIL_HEADERS,
       timeoutMs,
       // The endpoint answers a bare replayed POST with a challenge even on a
@@ -68,21 +83,22 @@ function bindDetailPost(
  * @param context - Account, action context and mediator from the driver.
  * @returns The same rows, some carrying a detail outcome.
  */
-export async function enrichAmexRows(
-  rows: readonly object[],
-  context: IEnrichRowsContext<IAmexCard>,
-): Promise<readonly object[]> {
-  const options = context.ctx.options.amexDetail;
-  if (options === undefined || !options.enabled) return rows;
+export function buildDetailEnrichHook(
+  apiHost: string,
+): (rows: readonly object[], context: IEnrichRowsContext<IDigitalV3Card>) => Promise<readonly object[]> {
+  return async (rows, context) => {
+    const options = context.ctx.options.cardDetail;
+    if (options === undefined || !options.enabled) return rows;
 
-  return enrichAmexDetail(rows as readonly Record<string, unknown>[], {
-    post: bindDetailPost(context.bus),
-    options,
-    account: { cardSuffix: context.acct.cardSuffix, companyCode: context.acct.companyCode },
-    now: () => Date.now(),
-    sleep: async (ms): Promise<void> => {
-      await new Promise((resolve): NodeJS.Timeout => setTimeout(resolve, ms));
-    },
-    jitter: () => Math.random(),
-  });
+    return enrichCardDetail(rows as readonly Record<string, unknown>[], {
+      post: bindDetailPost(context.bus, apiHost),
+      options,
+      account: { cardSuffix: context.acct.cardSuffix, companyCode: context.acct.companyCode },
+      now: () => Date.now(),
+      sleep: async (ms): Promise<void> => {
+        await new Promise((resolve): NodeJS.Timeout => setTimeout(resolve, ms));
+      },
+      jitter: () => Math.random(),
+    });
+  };
 }
