@@ -1,5 +1,5 @@
 /**
- * Amex detail interpretation.
+ * DigitalV3 detail interpretation (Isracard and Amex share this backbone).
  *
  * The costly mistakes here are both silent: claiming a counterparty name that
  * is really a wallet label (which would be written into a transaction's
@@ -14,7 +14,7 @@ import {
   AMEX_DETAIL_SCHEMA_VERSION,
   classifyDetailTransport,
   interpretDetailEnvelope,
-} from '../../../../Scrapers/Pipeline/Banks/Amex/scrape/AmexDetailInterpret.js';
+} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/DetailInterpret.js';
 
 const envelope = (data: Record<string, unknown>) => ({ isSuccess: true, data });
 
