@@ -98,6 +98,17 @@ export const PIPELINE_WELL_KNOWN_TXN_FIELDS = {
   amount: [
     'bancsAmount',
     'OperationAmount',
+    // MUST precede `trnAmt`. On a settled Cal row these differ, and only this
+    // one is the amount actually charged: `trnAmt` is the original deal total,
+    // so on a 10-payment plan it is TEN TIMES the payment, and on an
+    // index-linked or converted charge it is the pre-adjustment figure. The
+    // per-institution scraper in the original israeli-bank-scrapers encodes
+    // exactly this choice (`isPending ? trnAmt : amtBeforeConvAndIndex`).
+    //
+    // The ordering also reproduces the pending/settled split for free: the
+    // field exists only on settled rows, so a pending row falls through to
+    // `trnAmt`, which is what that scraper reads for pending.
+    'amtBeforeConvAndIndex',
     'trnAmt',
     'dealSum',
     'dealSumOutbound',
