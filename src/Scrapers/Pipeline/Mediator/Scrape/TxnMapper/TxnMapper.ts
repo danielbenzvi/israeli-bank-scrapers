@@ -120,10 +120,37 @@ function resolveAmount(raw: ApiRecord, singleAmount: ScalarFieldHit): number {
  * @returns Sign-corrected amount.
  */
 function applyDirectionWk(raw: ApiRecord, amount: number): number {
+  if (isOutboundByCode(raw)) return -Math.abs(amount);
   const direction = findFieldValue(raw, WK.direction);
   if (typeof direction !== 'string') return amount;
   if (!/^debit$/i.test(direction)) return amount;
   return -Math.abs(amount);
+}
+
+/**
+ * The code value meaning "money left the account".
+ *
+ * Hapoalim reports `eventAmount` as a positive magnitude and marks direction
+ * with `eventActivityTypeCode`: 1 inbound, 2 outbound. The word-matching
+ * direction check above can never match a number, so before this every
+ * payment, card settlement and mortgage instalment mapped POSITIVE — money
+ * leaving the account recorded as money arriving.
+ *
+ * Kept beside the logic rather than in the WK registry because that registry
+ * is contractually a map of field NAMES; which value means outbound is a fact
+ * about the field's contents, not its name.
+ */
+const OUTBOUND_ACTIVITY_CODE = 2;
+
+/**
+ * Whether a numeric activity code marks this row as outbound.
+ *
+ * @param raw - Raw transaction record.
+ * @returns True when a known outbound code is present.
+ */
+function isOutboundByCode(raw: ApiRecord): boolean {
+  const code = findFieldValue(raw, WK.outboundCodeFields);
+  return Number(code) === OUTBOUND_ACTIVITY_CODE;
 }
 
 /**
