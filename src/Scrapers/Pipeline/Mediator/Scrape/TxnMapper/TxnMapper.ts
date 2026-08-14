@@ -318,14 +318,22 @@ function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const type = isInstallmentTransaction(input.raw, restored.installments)
     ? TransactionTypes.Installments
     : base.type;
+  // Surfaced generically: any shape that attached provenance to a row, or an
+  // enrichment that recorded an outcome on it, gets that back on the mapped
+  // transaction. The mapper names no bank — it only forwards what it was given.
+  //
+  // Gated on EITHER, not on provenance alone. Provenance is attached while
+  // merging response containers, which only one bank needs; a detail outcome
+  // is attached by enrichment, which any bank can run. Requiring provenance
+  // silently discarded the outcome for every bank that does not produce it —
+  // the enrichment ran, spent its requests, and its result was dropped one
+  // layer later with nothing to show for it.
   const provenance = input.raw?.['__rowProvenance'];
-  // Surfaced generically: any shape that attached provenance to a row gets it
-  // back on the mapped transaction, alongside whatever its enrichment recorded.
-  // The mapper names no bank — it only forwards what it was given.
+  const detailOutcome = input.raw?.['__detailOutcome'];
   const rawTransaction =
-    provenance === undefined
+    provenance === undefined && detailOutcome === undefined
       ? undefined
-      : { ...(provenance as Record<string, unknown>), detailOutcome: input.raw?.['__detailOutcome'] };
+      : { ...((provenance ?? {}) as Record<string, unknown>), detailOutcome };
   return { ...base, ...resolveTxnSuffix(input.fields), ...restored, type, rawTransaction };
 }
 
