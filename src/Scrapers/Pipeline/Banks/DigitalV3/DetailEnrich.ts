@@ -141,11 +141,32 @@ function canonicalCardId(options: ICardDetailOptions, cardSuffix: string): strin
   return matches.length === 1 ? matches[0]?.canonicalCardId : undefined;
 }
 
+/**
+ * Voucher-number keys across the two DigitalV3 banks, most specific first.
+ *
+ * Amex uses `seqVoucherNumber`; Isracard uses `voucherNumberRatz`, and
+ * `…Outbound` on an outbound-currency row. Reading only Amex's names left the
+ * majority of Isracard rows with no voucher, so they were recorded as
+ * unfetchable and no category was ever requested for them — a quiet loss of
+ * most of the enrichment, with nothing failing to show for it.
+ */
+const VOUCHER_FIELDS = [
+  'seqVoucherNumber',
+  'voucherNumber',
+  'voucherNumberRatz',
+  'voucherNumberRatzOutbound',
+] as const;
+
+/** All-zeros is this provider's "no voucher" sentinel, not an identifier. */
+const VOUCHER_SENTINEL = /^0+$/;
+
 /** The voucher number identifying one transaction, when it has a usable one. */
 function voucherOf(raw: AmexRow): string | undefined {
-  const value = raw['seqVoucherNumber'] ?? raw['voucherNumber'];
-  const text = String(value ?? '');
-  return /^\d+$/.test(text) ? text : undefined;
+  for (const field of VOUCHER_FIELDS) {
+    const text = String(raw[field] ?? '');
+    if (/^\d+$/.test(text) && !VOUCHER_SENTINEL.test(text)) return text;
+  }
+  return undefined;
 }
 
 /** Request body for one transaction's detail. */
