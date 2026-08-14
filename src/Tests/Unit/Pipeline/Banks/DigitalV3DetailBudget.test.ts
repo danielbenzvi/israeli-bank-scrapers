@@ -1,5 +1,5 @@
 /**
- * The spending budget for one Amex detail pass.
+ * The spending budget for one DigitalV3 detail pass.
  *
  * The endpoint sits behind the same protections as login, so overrunning does
  * not produce a slow scrape — it produces a blocked session. These tests pin
@@ -10,7 +10,7 @@ import {
   type IDetailBudgetLimits,
   nextDetailRequest,
   retryFits,
-} from '../../../../Scrapers/Pipeline/Banks/Amex/scrape/AmexDetailBudget.js';
+} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/DetailBudget.js';
 
 const LIMITS: IDetailBudgetLimits = {
   maxRows: 10,

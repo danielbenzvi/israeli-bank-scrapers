@@ -1,5 +1,8 @@
 /**
- * Amex per-transaction detail — the request loop.
+ * DigitalV3 per-transaction detail — the request loop.
+ *
+ * Shared by Isracard and Amex, which are one company on one API backbone,
+ * differing only by domain.
  *
  * Joins the three pure pieces: {@link nextDetailRequest} decides whether a
  * request fits, {@link classifyDetailTransport} judges the response before its
@@ -14,20 +17,20 @@
 
 import { createHmac } from 'node:crypto';
 
-import type { Procedure } from '../../../Types/Procedure.js';
-import { isOk } from '../../../Types/Procedure.js';
-import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
+import type { Procedure } from '../../Types/Procedure.js';
+import { isOk } from '../../Types/Procedure.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import {
   AMEX_DETAIL_SCHEMA_VERSION,
   classifyDetailTransport,
   type IDetailOutcome,
   interpretDetailEnvelope,
-} from './AmexDetailInterpret.js';
+} from './DetailInterpret.js';
 import {
   type IDetailBudgetLimits,
   nextDetailRequest,
   retryFits,
-} from './AmexDetailBudget.js';
+} from './DetailBudget.js';
 
 /** Identity of the account being scraped, for deriving stable fingerprints. */
 export interface IDetailIdentityContext {
@@ -43,7 +46,7 @@ export interface ICardAlias {
 }
 
 /** Everything the enrichment pass needs from its caller. */
-export interface IAmexDetailOptions extends IDetailBudgetLimits {
+export interface ICardDetailOptions extends IDetailBudgetLimits {
   readonly enabled: boolean;
   /** When true, re-fetch detail the caller already holds. */
   readonly backfillEnabled: boolean;
@@ -64,9 +67,9 @@ export interface IDetailAccount {
 }
 
 /** Collaborators, injected so the loop is testable without a browser. */
-export interface IAmexDetailDeps {
+export interface ICardDetailDeps {
   readonly post: (body: Record<string, unknown>, timeoutMs: number) => Promise<Procedure<IPostWithMetadata>>;
-  readonly options: IAmexDetailOptions;
+  readonly options: ICardDetailOptions;
   readonly account: IDetailAccount;
   readonly now: () => number;
   readonly sleep: (ms: number) => Promise<void>;
@@ -123,7 +126,7 @@ function fingerprint(key: string, parts: readonly string[]): string {
  * @param cardSuffix - Four-digit suffix of the card being scraped.
  * @returns The canonical id, or undefined when it cannot be resolved uniquely.
  */
-function canonicalCardId(options: IAmexDetailOptions, cardSuffix: string): string | undefined {
+function canonicalCardId(options: ICardDetailOptions, cardSuffix: string): string | undefined {
   const { hmacKey, identityContext } = options;
   if (hmacKey === undefined || identityContext === undefined) return undefined;
   const observed = fingerprint(hmacKey, [
@@ -165,7 +168,7 @@ function detailBody(raw: AmexRow, cardSuffix: string, companyCode: number, vouch
  * @returns The outcome, and whether the pass should stop.
  */
 async function fetchOneDetail(
-  deps: IAmexDetailDeps,
+  deps: ICardDetailDeps,
   body: Record<string, unknown>,
   startedAt: number,
 ): Promise<{ outcome: IDetailOutcome; stopPass: boolean }> {
@@ -213,9 +216,9 @@ async function fetchOneDetail(
  * @param deps - Injected collaborators.
  * @returns The same rows, in the same order, some carrying an outcome.
  */
-export async function enrichAmexDetail(
+export async function enrichCardDetail(
   rows: readonly AmexRow[],
-  deps: IAmexDetailDeps,
+  deps: ICardDetailDeps,
 ): Promise<readonly AmexRow[]> {
   const { options, account } = deps;
   if (!options.enabled || options.hmacKey === undefined) return rows;

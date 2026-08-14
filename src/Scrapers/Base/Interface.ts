@@ -7,7 +7,7 @@ import type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.
 import type { IOutputDataOptions } from './Interfaces/OutputDataOptions.js';
 import type { IScraperLoginResult } from './Interfaces/ScraperLoginResult.js';
 import type { IScraperScrapingResult } from './Interfaces/ScraperScrapingResult.js';
-import type { IAmexDetailOptions } from '../Pipeline/Banks/Amex/scrape/AmexDetailEnrich.js';
+import type { ICardDetailOptions } from '../Pipeline/Banks/DigitalV3/DetailEnrich.js';
 
 export type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.js';
 export type { IErrorResult } from './Interfaces/ErrorResult.js';
@@ -218,7 +218,10 @@ export type ScraperOptions = ScraperBrowserOptions & {
   otpTimeoutMs?: number;
 
   /**
-   * Amex only — fetch per-transaction detail during the scrape.
+   * Isracard/Amex only — fetch per-transaction detail during the scrape.
+   *
+   * The two are one company on one API backbone, so a single option serves
+   * both; a scrape only ever runs one institution.
    *
    * Each enriched transaction costs one extra authenticated request against a
    * rate-limited endpoint, so the pass is bounded by row count, wall clock and
@@ -227,9 +230,9 @@ export type ScraperOptions = ScraperBrowserOptions & {
    *
    * Identity is keyed: the caller supplies an HMAC key and its own card
    * aliases, so nothing here can be correlated back to a card without that
-   * key. See IAmexDetailOptions.
+   * key. See ICardDetailOptions.
    */
-  amexDetail?: IAmexDetailOptions;
+  cardDetail?: ICardDetailOptions;
 
   /**
    * Login chain log verbosity.

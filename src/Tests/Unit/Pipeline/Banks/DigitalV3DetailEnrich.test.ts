@@ -1,5 +1,5 @@
 /**
- * The Amex detail request loop.
+ * The DigitalV3 detail request loop, shared by Isracard and Amex.
  *
  * The property tested hardest is that enrichment cannot SUBTRACT from a scrape:
  * every row goes in and every row comes out, in order, whatever happens to its
@@ -10,17 +10,17 @@
  */
 
 import {
-  enrichAmexDetail,
-  type IAmexDetailDeps,
-  type IAmexDetailOptions,
-} from '../../../../Scrapers/Pipeline/Banks/Amex/scrape/AmexDetailEnrich.js';
+  enrichCardDetail,
+  type ICardDetailDeps,
+  type ICardDetailOptions,
+} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/DetailEnrich.js';
 import { fail, succeed } from '../../../../Scrapers/Pipeline/Types/Procedure.js';
 import { ScraperErrorTypes } from '../../../../Scrapers/Base/ErrorTypes.js';
 
 const HMAC_KEY = 'k'.repeat(32);
 const IDENTITY = { owner: 'owner', provider: 'amex', credentialSetId: 'cs-1' };
 
-const OPTIONS: IAmexDetailOptions = {
+const OPTIONS: ICardDetailOptions = {
   enabled: true,
   backfillEnabled: false,
   maxRows: 10,
@@ -43,7 +43,7 @@ const okResponse = (data: Record<string, unknown>) =>
     envelope: { isSuccess: true, data },
   });
 
-function makeDeps(over: Partial<IAmexDetailDeps> = {}, options: Partial<IAmexDetailOptions> = {}): IAmexDetailDeps {
+function makeDeps(over: Partial<ICardDetailDeps> = {}, options: Partial<ICardDetailOptions> = {}): ICardDetailDeps {
   return {
     post: async () => okResponse({ businessName: 'M', branchDescription: 'CATEGORY' }),
     options: { ...OPTIONS, ...options },
@@ -56,7 +56,7 @@ function makeDeps(over: Partial<IAmexDetailDeps> = {}, options: Partial<IAmexDet
 }
 
 /** Alias table entry matching the fixture card, so a canonical id resolves. */
-async function withResolvableCard(over: Partial<IAmexDetailDeps> = {}, options: Partial<IAmexDetailOptions> = {}) {
+async function withResolvableCard(over: Partial<ICardDetailDeps> = {}, options: Partial<ICardDetailOptions> = {}) {
   // Derive the observed fingerprint the way the loop does, by letting it run
   // once with an empty table and reading which rows it left untouched — instead
   // the alias is supplied via a helper that mirrors the production shape.
@@ -70,57 +70,57 @@ async function withResolvableCard(over: Partial<IAmexDetailDeps> = {}, options: 
   });
 }
 
-describe('enrichAmexDetail — never subtracts from a scrape', () => {
+describe('enrichCardDetail — never subtracts from a scrape', () => {
   it('returns every row when enrichment is disabled', async () => {
     const input = rows(3);
-    const out = await enrichAmexDetail(input, makeDeps({}, { enabled: false }));
+    const out = await enrichCardDetail(input, makeDeps({}, { enabled: false }));
     expect(out).toHaveLength(3);
     expect(out).toEqual(input);
   });
 
   it('returns every row when no HMAC key is configured', async () => {
     const input = rows(3);
-    expect(await enrichAmexDetail(input, makeDeps({}, { hmacKey: undefined }))).toEqual(input);
+    expect(await enrichCardDetail(input, makeDeps({}, { hmacKey: undefined }))).toEqual(input);
   });
 
   it('returns every row when the card identity is unusable', async () => {
     const input = rows(3);
-    const out = await enrichAmexDetail(input, makeDeps({ account: { cardSuffix: 'nope', companyCode: 7 } }));
+    const out = await enrichCardDetail(input, makeDeps({ account: { cardSuffix: 'nope', companyCode: 7 } }));
     expect(out).toHaveLength(3);
     // Recorded rather than skipped silently, so "never asked" stays
     // distinguishable from "asked and learned nothing".
-    expect(out.every((r) => (r as Record<string, unknown>)['__detailOutcome'] !== undefined)).toBe(true);
+    expect(out.every((r: Record<string, unknown>) => (r as Record<string, unknown>)['__detailOutcome'] !== undefined)).toBe(true);
   });
 
   it('returns every row when the card cannot be resolved to a canonical id', async () => {
     const input = rows(4);
-    expect(await enrichAmexDetail(input, makeDeps())).toHaveLength(4);
+    expect(await enrichCardDetail(input, makeDeps())).toHaveLength(4);
   });
 
   it('returns every row when every request fails', async () => {
     const deps = await withResolvableCard({ post: async () => fail(ScraperErrorTypes.Generic, 'down') });
     const input = rows(3);
-    const out = await enrichAmexDetail(input, deps);
+    const out = await enrichCardDetail(input, deps);
     expect(out).toHaveLength(3);
   });
 
   it('preserves order and every provider field', async () => {
     const deps = await withResolvableCard();
     const input = rows(3);
-    const out = await enrichAmexDetail(input, deps);
-    expect(out.map((r) => (r as Record<string, unknown>)['seqVoucherNumber'])).toEqual(['1000', '1001', '1002']);
-    expect(out.every((r) => (r as Record<string, unknown>)['merchantName'] === 'M')).toBe(true);
+    const out = await enrichCardDetail(input, deps);
+    expect(out.map((r: Record<string, unknown>) => (r as Record<string, unknown>)['seqVoucherNumber'])).toEqual(['1000', '1001', '1002']);
+    expect(out.every((r: Record<string, unknown>) => (r as Record<string, unknown>)['merchantName'] === 'M')).toBe(true);
   });
 });
 
-describe('enrichAmexDetail — spending and stopping', () => {
+describe('enrichCardDetail — spending and stopping', () => {
   it('stops issuing requests once the row limit is reached, keeping later rows', async () => {
     let calls = 0;
     const deps = await withResolvableCard(
       { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { maxRows: 2 },
     );
-    const out = await enrichAmexDetail(rows(5), deps);
+    const out = await enrichCardDetail(rows(5), deps);
     expect(calls).toBe(2);
     expect(out).toHaveLength(5);
   });
@@ -136,7 +136,7 @@ describe('enrichAmexDetail — spending and stopping', () => {
         });
       },
     });
-    const out = await enrichAmexDetail(rows(5), deps);
+    const out = await enrichCardDetail(rows(5), deps);
     expect(calls).toBe(1); // stopped, rather than 5 doomed requests
     expect(out).toHaveLength(5);
   });
@@ -146,7 +146,7 @@ describe('enrichAmexDetail — spending and stopping', () => {
     const deps = await withResolvableCard({
       post: async () => { calls++; return succeed({ http: { status: 200, contentType: 'application/json', redirected: false, sameOrigin: true }, envelope: { unexpected: true } }); },
     });
-    await enrichAmexDetail(rows(4), deps);
+    await enrichCardDetail(rows(4), deps);
     expect(calls).toBe(1);
   });
 
@@ -158,7 +158,7 @@ describe('enrichAmexDetail — spending and stopping', () => {
       { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { existingFingerprints: [rowFp] },
     );
-    const out = await enrichAmexDetail(rows(2), deps);
+    const out = await enrichCardDetail(rows(2), deps);
     expect(calls).toBe(1); // the second row only
     expect(out).toHaveLength(2);
   });
@@ -171,7 +171,7 @@ describe('enrichAmexDetail — spending and stopping', () => {
       { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { existingFingerprints: [rowFp], backfillEnabled: true },
     );
-    await enrichAmexDetail(rows(2), deps);
+    await enrichCardDetail(rows(2), deps);
     expect(calls).toBe(2);
   });
 
@@ -183,7 +183,7 @@ describe('enrichAmexDetail — spending and stopping', () => {
       { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { blockedFingerprints: [rowFp], backfillEnabled: true },
     );
-    await enrichAmexDetail(rows(2), deps);
+    await enrichCardDetail(rows(2), deps);
     expect(calls).toBe(1);
   });
 
@@ -203,7 +203,7 @@ describe('enrichAmexDetail — spending and stopping', () => {
         ],
       },
     );
-    const out = await enrichAmexDetail(rows(2), deps);
+    const out = await enrichCardDetail(rows(2), deps);
     expect(calls).toBe(0);
     expect(out).toHaveLength(2);
   });
