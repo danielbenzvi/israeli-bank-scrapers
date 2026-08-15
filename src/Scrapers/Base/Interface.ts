@@ -56,7 +56,22 @@ export type ScraperCredentials =
       | {
           otpLongTermToken: string;
         }
-    ));
+    ))
+  // Cibus (Pluxee): username + password, plus an optional employer "company"
+  // field whose need the provider's own pre-auth call decides. Given its own
+  // variant rather than widening `{ username, password }`, so no other
+  // scraper's credential shape gains fields it never uses.
+  //
+  // `otpLongTermToken` carries the provider's ~30-day device token, under the
+  // same contract as the two shapes above: the caller receives it through
+  // `onAuthFlowComplete`, persists it, and passes it back on the next run to
+  // suppress the one-time-code challenge.
+  | {
+      username: string;
+      password: string;
+      company?: string;
+      otpLongTermToken?: string;
+    };
 
 export type OptInFeatures =
   | 'isracard-amex:skipAdditionalTransactionInformation'
