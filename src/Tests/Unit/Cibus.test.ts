@@ -1,4 +1,5 @@
 import { CompanyTypes } from '../../Definitions.js';
+import { toIsoDate } from '../../Scrapers/Cibus/CibusMapping.js';
 import {
   ALLOWED_URLS,
   AUTH_TOKEN_URL,
@@ -77,5 +78,60 @@ describe('Cibus — the one-time-code status', () => {
     expect(OTP_REQUIRED_STATUS).toBe(210);
     expect(OTP_REQUIRED_STATUS).not.toBe(200);
     expect(OTP_REQUIRED_STATUS).not.toBe(401);
+  });
+});
+
+/**
+ * Parse attempt that reports a refusal instead of throwing, so assertions can
+ * compare a value rather than wrap a call.
+ * @param value - Candidate provider date string.
+ * @returns The ISO date, or the literal 'REJECTED' when toIsoDate refused it.
+ */
+const TRY_PARSE = (value: string): string => {
+  try {
+    return toIsoDate(value);
+  } catch {
+    return 'REJECTED';
+  }
+};
+
+describe('Cibus — the provider date', () => {
+  it('converts DD/MM/YYYY to the ISO date ITransaction.date declares', () => {
+    const midMonth = TRY_PARSE('20/07/2026');
+    const yearEnd = TRY_PARSE('31/12/2026');
+    expect(midMonth).toBe('2026-07-20');
+    expect(yearEnd).toBe('2026-12-31');
+  });
+
+  /**
+   * THE REASON THIS FUNCTION EXISTS.
+   *
+   * When the day is <= 12 the string is also a valid US MM/DD, so `new Date()`
+   * accepts it and returns the WRONG calendar day without erroring — for
+   * roughly half of any real feed. `date` is part of the consumer's dedup key,
+   * so a wrong day there re-imports the row as a new purchase forever.
+   */
+  it('reads the day first even when the value is a valid US MM/DD', () => {
+    const fifthOfAugust = TRY_PARSE('05/08/2026');
+    const firstOfFebruary = TRY_PARSE('01/02/2026');
+    expect(fifthOfAugust).toBe('2026-08-05');
+    expect(firstOfFebruary).toBe('2026-02-01');
+
+    // What the naive parse produces, asserted so this test documents the bug
+    // it prevents rather than merely asserting the fix.
+    const naive = new Date('05/08/2026');
+    const naiveMonth = naive.getMonth();
+    expect(naiveMonth).toBe(4); // May — wrong.
+  });
+
+  it('throws rather than guessing when the format changes', () => {
+    const alreadyIso = TRY_PARSE('2026-07-20');
+    const monthOutOfRange = TRY_PARSE('20/13/2026');
+    const dayIsZero = TRY_PARSE('00/07/2026');
+    const empty = TRY_PARSE('');
+    expect(alreadyIso).toBe('REJECTED');
+    expect(monthOutOfRange).toBe('REJECTED');
+    expect(dayIsZero).toBe('REJECTED');
+    expect(empty).toBe('REJECTED');
   });
 });
