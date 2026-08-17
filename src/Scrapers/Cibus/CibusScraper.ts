@@ -27,6 +27,7 @@ import {
   OTP_REQUIRED_STATUS,
   PORTAL_URL,
   RECAPTCHA_ACTION,
+  RECAPTCHA_READY_TIMEOUT_MS,
   SESSION_COOKIE_NAME,
   SHOW_COMPANY_FIELD_URL,
 } from './Config/CibusApiConfig.js';
@@ -106,6 +107,13 @@ function collectWindows(start: moment.Moment, end: moment.Moment): IDateWindow[]
   }
   return windows;
 }
+
+/**
+ * Sentinel for "the provider's script has not loaded yet", which the poller
+ * treats as keep-waiting. A named constant rather than a bare `undefined`, so
+ * the intent is legible at both the producer and the poller.
+ */
+const NOT_YET = undefined;
 
 /**
  * Report a code the provider declined.
@@ -422,13 +430,32 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * @returns The token, or '' when the API never became available.
    */
   private async mintRecaptchaToken(): Promise<string> {
+    // POLLED, because the page is opened at `domcontentloaded` and the
+    // provider's reCAPTCHA script arrives after it. An earlier revision read
+    // the key once, immediately, and reported "token could not be minted" on a
+    // page that was merely still loading — a live run caught it. `ready()`
+    // would be the library's own answer, but its callback form cannot be
+    // expressed without a promise executor, so this polls the whole mint
+    // instead and gets the same guarantee without the banned shape.
+    const opts = { timeout: RECAPTCHA_READY_TIMEOUT_MS, interval: 500 };
+    const poll = this.tryMintToken.bind(this);
+    const minted = await waitUntil(poll, 'cibus recaptcha token', opts).catch(() => '');
+    return minted;
+  }
+
+  /**
+   * One attempt at minting, for the poller above.
+   * @returns The token, or undefined while the provider's script is absent.
+   */
+  private async tryMintToken(): Promise<typeof NOT_YET | string> {
     const keyRead = this.page.evaluate(READ_SITE_KEY);
     const siteKey = await keyRead.catch(() => '');
-    if (siteKey === '') return '';
+    if (siteKey === '') return NOT_YET;
     // Tab-joined rather than an object: the argument crosses into the page
     // realm, and a primitive is the least there is to go wrong in transit.
     const pair = `${siteKey}\t${RECAPTCHA_ACTION}`;
-    return this.page.evaluate(MINT_WITH_KEY, pair).catch(() => '');
+    const minted = await this.page.evaluate(MINT_WITH_KEY, pair).catch(() => '');
+    return minted === '' ? NOT_YET : minted;
   }
 
   /**

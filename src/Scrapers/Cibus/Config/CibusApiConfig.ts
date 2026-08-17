@@ -66,6 +66,16 @@ export const OTP_REQUIRED_STATUS = 210;
  */
 export const RECAPTCHA_ACTION = 'login';
 
+/**
+ * How long to wait for the provider's reCAPTCHA script to load and mint.
+ *
+ * The page is opened at `domcontentloaded`, so the script is routinely absent
+ * for the first moment. Generous rather than tight: a miss here is reported as
+ * a timeout and fails the whole login, so it must not fire on an ordinary slow
+ * load.
+ */
+export const RECAPTCHA_READY_TIMEOUT_MS = 30_000;
+
 /** How long to wait for the ~30-day device token to appear after auth. */
 export const DEVICE_COOKIE_TIMEOUT_MS = 15_000;
 
