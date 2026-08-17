@@ -57,14 +57,45 @@ export function isAllowedUrl(url: string): boolean {
 export const OTP_REQUIRED_STATUS = 210;
 
 /**
- * reCAPTCHA v3 action name the provider's own front end uses.
+ * Fixed application identifier the provider's own front end sends on every
+ * call.
  *
- * v3 binds a token to an action and the server may verify it. A wrong value is
- * rejected with the same opaque 401 as a wrong password, so this is pinned
- * rather than guessed, and must be re-read from the SPA if login starts failing
- * for no visible reason.
+ * Not a secret — it is visible to anyone who opens the site — but the API
+ * rejects or empties responses without it, so omitting it makes a perfectly
+ * good session look like an account with no transactions. That is exactly how
+ * it presented the first time: authentication succeeded, cookies were issued,
+ * and the data call returned zero rows.
  */
-export const RECAPTCHA_ACTION = 'login';
+export const APPLICATION_ID = 'E5D5FEF5-A05E-4C64-AEBA-BA0CECA0E402';
+
+/**
+ * The provider's PUBLIC reCAPTCHA site key.
+ *
+ * Not a secret: it ships in the page source and in the script URL, and is
+ * meaningless without the provider's own server-side secret. Pinned here as a
+ * FALLBACK only — {@link READ_SITE_KEY} reads it from the live page first, and
+ * this is used when the provider's application has not booted far enough to
+ * have loaded its own script. Every use of the fallback is logged, so a key
+ * rotation surfaces as itself rather than as an unexplained run of 401s.
+ */
+export const FALLBACK_SITE_KEY = '6LddY28jAAAAALbiEdodIdIYiM563_AgOW4LMcmu';
+
+/**
+ * reCAPTCHA v3 action names, read from the provider's own front end.
+ *
+ * A v3 token is bound to an action and the provider verifies it, so these are
+ * observed rather than guessed — a wrong value is rejected with the same opaque
+ * 401 as a wrong password. Captured by wrapping `grecaptcha.execute` in the
+ * live page and driving the first login step with a fictitious user.
+ *
+ * TWO ACTIONS, AND ONE TOKEN EACH. The front end calls `execute` separately for
+ * each request, which is not decoration: **a v3 token is single-use**. Minting
+ * once and sending the same token to both endpoints spends it on the first and
+ * gets the second rejected — again as an indistinguishable 401. Every request
+ * that carries a token must mint its own.
+ */
+export const RECAPTCHA_ACTION_PRECHECK = 'checkUserCompany';
+export const RECAPTCHA_ACTION_LOGIN = 'login';
 
 /**
  * How long to wait for the provider's reCAPTCHA script to load and mint.

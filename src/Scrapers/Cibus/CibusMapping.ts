@@ -34,9 +34,29 @@ export interface ICibusBudget {
   ExpirationDate?: string;
 }
 
-/** Envelope shape of the data endpoint. */
+/**
+ * Envelope of the purchase feed.
+ *
+ * Rows arrive under `list` at the TOP level — not nested under `data`, and not
+ * called `deals`. `head` carries the provider's own column declaration and a
+ * row count; the count is the ONLY truncation signal this payload offers, and
+ * silent truncation in a backfill is precisely the shape that reads as a quiet
+ * month rather than as missing data.
+ */
 export interface ICibusDataResponse {
-  data?: ICibusBudget & { deals?: ICibusDeal[] };
+  list?: ICibusDeal[];
+  head?: { count?: number };
+}
+
+/**
+ * Envelope of the budget endpoint — a SEPARATE call from the purchase feed.
+ *
+ * `data` is an ARRAY; the current period is its first entry. An absent or empty
+ * array is the provider saying the period has not been provisioned, which is a
+ * legitimate state rather than a failure.
+ */
+export interface ICibusBudgetResponse {
+  data?: ICibusBudget[];
 }
 
 /** A cookie as the browser context reports it. */

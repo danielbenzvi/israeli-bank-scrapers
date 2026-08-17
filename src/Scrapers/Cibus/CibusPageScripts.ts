@@ -57,6 +57,49 @@ const READ_RENDER_PARAM = (source: string): string => {
 };
 
 /**
+ * Ensure Google's reCAPTCHA script is present, and report whether it is usable
+ * YET.
+ *
+ * WHY NOT JUST WAIT FOR THE PAGE. The provider's Angular app is what normally
+ * loads this script, and under some browser configurations that app never
+ * boots — the document is the bare shell, and waiting simply times out. But
+ * the app is not what we need. reCAPTCHA only requires the script and the
+ * right origin, both of which we have without a single line of the provider's
+ * application running.
+ *
+ * This is Google's own script at Google's own URL, exactly as the page would
+ * have requested it. Nothing is faked or worked around.
+ *
+ * DELIBERATELY DOES NOT WAIT. The caller already polls this on an interval, so
+ * waiting here too would be a second timeout loop with its own timeout, in a
+ * realm that cannot use the project's own waiting helpers. Injecting and
+ * reporting readiness leaves exactly one place that decides how long to wait.
+ * @param siteKey - The public site key to load the script for.
+ * @returns True when `grecaptcha.execute` is callable now.
+ */
+export const ENSURE_RECAPTCHA = (siteKey: string): boolean => {
+  const scope = globalThis as unknown as IPageScope;
+  if (scope.grecaptcha?.execute) return true;
+  const src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
+  const alreadyRequested = scope.document.querySelector(`script[src="${src}"]`);
+  if (!alreadyRequested) ADD_SCRIPT(scope, src);
+  return false;
+};
+
+/**
+ * Append a script tag to the document head.
+ * @param scope - The page realm.
+ * @param src - Absolute script URL.
+ * @returns True once appended.
+ */
+const ADD_SCRIPT = (scope: IPageScope, src: string): boolean => {
+  const tag = scope.document.createElement('script');
+  tag.src = src;
+  scope.document.head.appendChild(tag);
+  return true;
+};
+
+/**
  * Mint a reCAPTCHA v3 token, binding it to one action.
  *
  * Calls `execute` directly rather than waiting on `grecaptcha.ready`: the
