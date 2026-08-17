@@ -26,6 +26,7 @@ interface IGrecaptcha {
 interface IPageScope {
   grecaptcha?: IGrecaptcha;
   document: Document;
+  setTimeout: (cb: () => void, ms: number) => number;
 }
 
 /**
@@ -54,6 +55,39 @@ const READ_RENDER_PARAM = (source: string): string => {
   const url = new URL(source);
   const value = url.searchParams.get('render');
   return value ?? '';
+};
+
+/**
+ * Load Google's reCAPTCHA script ourselves and wait for it to be usable.
+ *
+ * WHY NOT JUST WAIT FOR THE PAGE. The provider's Angular app is what normally
+ * loads this script, and under some browser configurations that app never
+ * boots — the document is the bare shell, and waiting simply times out. But
+ * the app is not what we need. reCAPTCHA only requires the script and the
+ * right origin, both of which we have without a single line of the provider's
+ * application running.
+ *
+ * This is Google's own script at Google's own URL, exactly as the page would
+ * have requested it. Nothing is faked or worked around.
+ * @param siteKey - The public site key to load the script for.
+ * @returns True once `grecaptcha.execute` is callable.
+ */
+export const ENSURE_RECAPTCHA = async (siteKey: string): Promise<boolean> => {
+  const scope = globalThis as unknown as IPageScope;
+  if (scope.grecaptcha?.execute) return true;
+  const src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
+  const existing = scope.document.querySelector(`script[src="${src}"]`);
+  if (!existing) {
+    const tag = scope.document.createElement('script');
+    tag.src = src;
+    scope.document.head.appendChild(tag);
+  }
+  const deadline = Date.now() + 15000;
+  while (Date.now() < deadline) {
+    if (scope.grecaptcha?.execute) return true;
+    await new Promise<void>(resolve => scope.setTimeout(() => resolve(), 200));
+  }
+  return false;
 };
 
 /**

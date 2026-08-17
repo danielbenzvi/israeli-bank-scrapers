@@ -57,6 +57,30 @@ export function isAllowedUrl(url: string): boolean {
 export const OTP_REQUIRED_STATUS = 210;
 
 /**
+ * Fixed application identifier the provider's own front end sends on every
+ * call.
+ *
+ * Not a secret — it is visible to anyone who opens the site — but the API
+ * rejects or empties responses without it, so omitting it makes a perfectly
+ * good session look like an account with no transactions. That is exactly how
+ * it presented the first time: authentication succeeded, cookies were issued,
+ * and the data call returned zero rows.
+ */
+export const APPLICATION_ID = 'E5D5FEF5-A05E-4C64-AEBA-BA0CECA0E402';
+
+/**
+ * The provider's PUBLIC reCAPTCHA site key.
+ *
+ * Not a secret: it ships in the page source and in the script URL, and is
+ * meaningless without the provider's own server-side secret. Pinned here as a
+ * FALLBACK only — {@link READ_SITE_KEY} reads it from the live page first, and
+ * this is used when the provider's application has not booted far enough to
+ * have loaded its own script. Every use of the fallback is logged, so a key
+ * rotation surfaces as itself rather than as an unexplained run of 401s.
+ */
+export const FALLBACK_SITE_KEY = '6LddY28jAAAAALbiEdodIdIYiM563_AgOW4LMcmu';
+
+/**
  * reCAPTCHA v3 action name the provider's own front end uses.
  *
  * v3 binds a token to an action and the server may verify it. A wrong value is

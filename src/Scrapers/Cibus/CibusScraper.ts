@@ -18,11 +18,18 @@ import {
   toAccount,
   toCookieHeader,
 } from './CibusMapping.js';
-import { MINT_WITH_KEY, READ_ENTERPRISE_FLAG, READ_SITE_KEY } from './CibusPageScripts.js';
 import {
+  ENSURE_RECAPTCHA,
+  MINT_WITH_KEY,
+  READ_ENTERPRISE_FLAG,
+  READ_SITE_KEY,
+} from './CibusPageScripts.js';
+import {
+  APPLICATION_ID,
   AUTH_TOKEN_URL,
   DATA_URL,
   DEVICE_COOKIE_TIMEOUT_MS,
+  FALLBACK_SITE_KEY,
   isAllowedUrl,
   OTP_REQUIRED_STATUS,
   PORTAL_URL,
@@ -72,7 +79,15 @@ interface IPostOptions {
  * @returns Options for the in-page fetch helper.
  */
 function postOptions(data: Record<string, unknown>): IPostOptions {
-  const extraHeaders = { 'Content-Type': 'application/json' };
+  // Sent the way the provider's own front end sends them. `application-id` in
+  // particular is not optional: without it the API answers a valid session with
+  // an empty result rather than an error, which reads as "no transactions".
+  const extraHeaders = {
+    'Content-Type': 'application/json',
+    accept: 'application/json, text/plain, */*',
+    'accept-language': 'he',
+    'application-id': APPLICATION_ID,
+  };
   return { data: data as never, extraHeaders, shouldIgnoreErrors: true };
 }
 
@@ -448,14 +463,30 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * @returns The token, or undefined while the provider's script is absent.
    */
   private async tryMintToken(): Promise<typeof NOT_YET | string> {
-    const keyRead = this.page.evaluate(READ_SITE_KEY);
-    const siteKey = await keyRead.catch(() => '');
-    if (siteKey === '') return NOT_YET;
+    const siteKey = await this.resolveSiteKey();
+    const ready = await this.page.evaluate(ENSURE_RECAPTCHA, siteKey).catch(() => false);
+    if (!ready) return NOT_YET;
     // Tab-joined rather than an object: the argument crosses into the page
     // realm, and a primitive is the least there is to go wrong in transit.
     const pair = `${siteKey}\t${RECAPTCHA_ACTION}`;
     const minted = await this.page.evaluate(MINT_WITH_KEY, pair).catch(() => '');
     return minted === '' ? NOT_YET : minted;
+  }
+
+  /**
+   * The provider's public site key — from the live page when its application
+   * has loaded, otherwise the pinned fallback.
+   *
+   * Reading it first means a rotation is picked up automatically; falling back
+   * means a page whose application never boots is still usable. The fallback is
+   * logged every time, so a rotation cannot hide behind it.
+   * @returns The site key to mint against.
+   */
+  private async resolveSiteKey(): Promise<string> {
+    const fromPage = await this.page.evaluate(READ_SITE_KEY).catch(() => '');
+    if (fromPage !== '') return fromPage;
+    this.bankLog.debug('site key not present in page — using pinned fallback');
+    return FALLBACK_SITE_KEY;
   }
 
   /**
