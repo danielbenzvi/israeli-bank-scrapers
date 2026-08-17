@@ -10,6 +10,7 @@ import { fetchPostWithinPageWithMetadata } from '../Pipeline/Mediator/Network/Fe
 import {
   type IBrowserCookie,
   type ICibusBudget,
+  type ICibusBudgetResponse,
   type ICibusDataResponse,
   isAuthenticated,
   isDeviceCookie,
@@ -33,7 +34,8 @@ import {
   isAllowedUrl,
   OTP_REQUIRED_STATUS,
   PORTAL_URL,
-  RECAPTCHA_ACTION,
+  RECAPTCHA_ACTION_LOGIN,
+  RECAPTCHA_ACTION_PRECHECK,
   RECAPTCHA_READY_TIMEOUT_MS,
   SESSION_COOKIE_NAME,
   SHOW_COMPANY_FIELD_URL,
@@ -189,11 +191,21 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
     const windows = this.monthWindows();
     const requests = windows.map(async window => this.fetchWindow(window));
     const pages = await Promise.all(requests);
-    const deals = pages.flatMap(page => page?.data?.deals ?? []);
-    const budget = pages.reduce<ICibusBudget>((acc, page) => page?.data ?? acc, {});
+    const deals = pages.flatMap(page => page?.list ?? []);
+    const budget = await this.fetchBudget();
     this.bankLog.debug('fetched %d rows', deals.length);
     const account = toAccount(deals, budget, this.options);
     return { success: true, accounts: [account] };
+  }
+
+  /**
+   * Fetch the benefit budget — its own endpoint, not part of the purchase feed.
+   * @returns The current period's budget, or an empty object when unprovisioned.
+   */
+  private async fetchBudget(): Promise<ICibusBudget> {
+    const body = { type: 'prx_get_budgets' };
+    const res = await this.post<ICibusBudgetResponse>(DATA_URL, body);
+    return res?.data?.[0] ?? {};
   }
 
   /**
@@ -202,10 +214,15 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * @returns Success once authenticated, else a categorised failure.
    */
   private async authenticate(credentials: ICibusCredentials): Promise<IScraperScrapingResult> {
-    const token = await this.mintRecaptchaToken();
-    if (token === '') return createTimeoutError('reCAPTCHA token could not be minted');
-    await this.postShowCompanyField(credentials, token);
-    const outcome = await this.submitPassword(credentials, token);
+    const precheck = await this.mintRecaptchaToken(RECAPTCHA_ACTION_PRECHECK);
+    if (precheck === '') return createTimeoutError('reCAPTCHA token could not be minted');
+    await this.postShowCompanyField(credentials, precheck);
+    // A SECOND token, freshly minted and bound to the login action. Not an
+    // optimisation to skip: v3 tokens are single-use and the precheck above has
+    // already spent that one.
+    const loginToken = await this.mintRecaptchaToken(RECAPTCHA_ACTION_LOGIN);
+    if (loginToken === '') return createTimeoutError('reCAPTCHA token could not be minted');
+    const outcome = await this.submitPassword(credentials, loginToken);
     return this.resolveAuthOutcome(outcome);
   }
 
@@ -326,7 +343,7 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
     challenge: IAuthOutcome,
     code: string,
   ): Promise<IScraperScrapingResult> {
-    const token = await this.mintRecaptchaToken();
+    const token = await this.mintRecaptchaToken(RECAPTCHA_ACTION_LOGIN);
     if (token === '') return createTimeoutError('token could not be minted for the code');
     const outcome = await this.submitOtp(challenge, code, token);
     const isAccepted = isAuthenticated(outcome.status);
@@ -442,9 +459,12 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
 
   /**
    * Mint a reCAPTCHA v3 token from the page's own script.
+   * @param action - The v3 action to bind this token to. One token per request:
+   *   a v3 token is single-use, so reusing one across two calls gets the second
+   *   rejected as an opaque 401.
    * @returns The token, or '' when the API never became available.
    */
-  private async mintRecaptchaToken(): Promise<string> {
+  private async mintRecaptchaToken(action: string): Promise<string> {
     // POLLED, because the page is opened at `domcontentloaded` and the
     // provider's reCAPTCHA script arrives after it. An earlier revision read
     // the key once, immediately, and reported "token could not be minted" on a
@@ -453,22 +473,27 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
     // expressed without a promise executor, so this polls the whole mint
     // instead and gets the same guarantee without the banned shape.
     const opts = { timeout: RECAPTCHA_READY_TIMEOUT_MS, interval: 500 };
-    const poll = this.tryMintToken.bind(this);
+    /**
+     * One poll attempt, bound to the action this mint is for.
+     * @returns The token, or the keep-waiting sentinel.
+     */
+    const poll = async (): Promise<typeof NOT_YET | string> => this.tryMintToken(action);
     const minted = await waitUntil(poll, 'cibus recaptcha token', opts).catch(() => '');
     return minted;
   }
 
   /**
    * One attempt at minting, for the poller above.
+   * @param action - The v3 action to bind this token to.
    * @returns The token, or undefined while the provider's script is absent.
    */
-  private async tryMintToken(): Promise<typeof NOT_YET | string> {
+  private async tryMintToken(action: string): Promise<typeof NOT_YET | string> {
     const siteKey = await this.resolveSiteKey();
-    const ready = await this.page.evaluate(ENSURE_RECAPTCHA, siteKey).catch(() => false);
-    if (!ready) return NOT_YET;
+    const isReady = await this.page.evaluate(ENSURE_RECAPTCHA, siteKey).catch(() => false);
+    if (!isReady) return NOT_YET;
     // Tab-joined rather than an object: the argument crosses into the page
     // realm, and a primitive is the least there is to go wrong in transit.
-    const pair = `${siteKey}\t${RECAPTCHA_ACTION}`;
+    const pair = `${siteKey}\t${action}`;
     const minted = await this.page.evaluate(MINT_WITH_KEY, pair).catch(() => '');
     return minted === '' ? NOT_YET : minted;
   }
