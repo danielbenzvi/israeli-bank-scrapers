@@ -5,16 +5,20 @@ import {
   TransactionTypes,
 } from '../../Transactions.js';
 import { type ScraperOptions } from '../Base/Interface.js';
+import ScraperError from '../Base/ScraperError.js';
 import { DEVICE_COOKIE_PREFIX } from './Config/CibusApiConfig.js';
 
 /**
- * One row of the provider's purchase feed, passed through with **no derived
- * fields**.
+ * One row of the provider's purchase feed, as the provider sent it.
  *
- * Every value is exactly what the provider sent. `date` in particular stays the
- * provider's `DD/MM/YYYY` string rather than being reformatted: the consumer
- * owns the single parser for it, and a second parser here would disagree
- * silently for every day <= 12.
+ * `date` arrives as `DD/MM/YYYY` and is the ONE field this module converts:
+ * {@link ITransaction.date} declares an ISO date string, and a scraper that
+ * puts something else there is lying to every consumer — including this
+ * library's own logging, which renders such a row as `Invalid Date`. The
+ * conversion is explicit and strict; see {@link toIsoDate}.
+ *
+ * Converting here loses nothing: the untouched row still reaches the consumer
+ * as `rawTransaction` whenever `includeRawTransaction` is set.
  */
 export interface ICibusDeal {
   deal_id: number;
@@ -68,6 +72,64 @@ export interface IBrowserCookie {
 
 /** The only currency this provider deals in. */
 const ILS = { originalCurrency: 'ILS', chargedCurrency: 'ILS' } as const;
+
+/** `DD/MM/YYYY` — the only shape the provider's purchase feed uses. */
+const PROVIDER_DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4})$/;
+
+/**
+ * Convert the provider's `DD/MM/YYYY` into the ISO date `ITransaction.date`
+ * declares.
+ *
+ * Parsed by explicit field position, never by `new Date(...)`: that reads
+ * `05/08/2026` as a US MM/DD and would silently return the wrong calendar day
+ * for every day <= 12 — roughly half of any real feed, and wrong in a way that
+ * still looks like a valid date. The range checks catch a provider that
+ * switches to MM/DD, which the regex alone cannot see.
+ *
+ * Throws rather than passing an unrecognised value through. A provider that
+ * changed its date format is a real breakage, and a row carrying a guessed
+ * date is worse than a scrape that fails and says so.
+ * @param raw - The provider's date string.
+ * @returns The same calendar day as `YYYY-MM-DD`.
+ */
+export function toIsoDate(raw: string): string {
+  const value = raw.trim();
+  const match = PROVIDER_DATE_RE.exec(value);
+  if (!match) throw new ScraperError(`Cibus: unrecognised date format '${value}'`);
+  const [, day, month, year] = match;
+  const isInRange = isCalendarRange(day, month);
+  if (!isInRange) throw new ScraperError(`Cibus: date out of calendar range '${value}'`);
+  return `${year}-${month}-${day}`;
+}
+
+/**
+ * Whether the two leading fields fall inside the calendar.
+ *
+ * The regex alone accepts `20/13/2026` — which is exactly what a switch to
+ * MM/DD looks like on any day past the 12th, and the one shape that betrays
+ * such a change instead of silently transposing.
+ * @param day - The first field of the provider's date.
+ * @param month - The second field.
+ * @returns True when both fields are in range.
+ */
+function isCalendarRange(day: string, month: string): boolean {
+  const isMonthValid = Number(month) >= 1 && Number(month) <= 12;
+  const isDayValid = Number(day) >= 1 && Number(day) <= 31;
+  return isMonthValid && isDayValid;
+}
+
+/**
+ * Both date fields, from the provider's single date value.
+ *
+ * The feed carries no separate settlement date, so `processedDate` mirrors
+ * `date` rather than being invented.
+ * @param raw - The provider's `DD/MM/YYYY` string.
+ * @returns The transaction's two date fields, both ISO.
+ */
+function toDates(raw: string): { date: string; processedDate: string } {
+  const iso = toIsoDate(raw);
+  return { date: iso, processedDate: iso };
+}
 
 /** Statuses the provider uses for "authenticated". */
 const OK_STATUSES: readonly number[] = [200, 201];
@@ -162,7 +224,7 @@ export function toTransaction(deal: ICibusDeal, options: ScraperOptions): ITrans
   const amount = -deal.price;
   const raw = options.includeRawTransaction ? deal : undefined;
   const money = { originalAmount: amount, chargedAmount: amount, ...ILS };
-  const dates = { date: deal.date, processedDate: deal.date }; // VERBATIM — see ICibusDeal.
+  const dates = toDates(deal.date);
   const core = { type: TransactionTypes.Normal, identifier: deal.deal_id, ...dates };
   const body = { description: deal.rest_name ?? '', status: TransactionStatuses.Completed };
   const extras = { providerExtra: toDealExtra(deal), rawTransaction: raw };
