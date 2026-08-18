@@ -21,6 +21,7 @@ import {
 } from '../AutoMapperFacade/AutoMapperTypes.js';
 import { findFieldValue } from '../BfsFieldSearch/BfsFieldSearch.js';
 import { coerceNumber, coerceString, parseAutoDate } from '../Coercion/Coercion.js';
+import restoreProviderFields from './RestoredFields.js';
 import { signCardAmounts } from './TxnSign.js';
 
 const LOG = getDebug(import.meta.url);
@@ -229,6 +230,8 @@ interface IBuildTxnInput {
   readonly dates: IDateStrings;
   readonly amounts: IResolvedAmounts;
   readonly fields: IRawTxnFields;
+  /** Backing record, for the fields the WK aliases do not cover. */
+  readonly raw: ApiRecord;
 }
 
 /** Transaction shape minus the fields {@link resolveTxnSuffix} owns. */
@@ -258,12 +261,18 @@ function buildTxnBase(input: IBuildTxnInput): ITxnBase {
  * primitives. Pure mapping — no coercion or validation beyond
  * the currency normalisation + identifier sanitisation already
  * performed upstream.
+ *
+ * {@link restoreProviderFields} is spread last and returns only the keys it
+ * actually found, so it can supply the optional fields the WK aliases do not
+ * reach without overwriting anything the mapper resolved itself.
+ *
  * @param input - Bundled dates + amounts + raw fields.
  * @returns Mapped transaction.
  */
 function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const base = buildTxnBase(input);
-  return { ...base, ...resolveTxnSuffix(input.fields) };
+  const restored = restoreProviderFields(input.raw, base.type);
+  return { ...base, ...resolveTxnSuffix(input.fields), ...restored };
 }
 
 /**
@@ -303,7 +312,7 @@ function autoMapTransaction(raw: ApiRecord, isCardIssuer?: boolean): ITransactio
   const isCard = isCardIssuer ?? Boolean(fields.voidField);
   const amounts = computeAmounts(raw, fields, isCard);
   if (!isMappableTxn(dateStr, amounts.amtNum)) return rejectMappedTxn(dateStr, amounts.amtNum);
-  return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields });
+  return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields, raw });
 }
 
 export { autoMapTransaction, isVoidedTransaction };
