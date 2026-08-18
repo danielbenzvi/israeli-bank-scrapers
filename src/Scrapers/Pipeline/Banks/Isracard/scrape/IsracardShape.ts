@@ -56,6 +56,8 @@ function digitalV3Headers(): HeaderMap {
 const ISRACARD_SHAPE: IApiDirectScrapeShape<IIsracardCard, number> = {
   stepName: 'IsracardScrape',
   accountNumberOf,
+  // A card issuer: charges arrive positive and the mapper flips them.
+  isCardIssuer: true,
   prime: { navUrl: primeUrl },
   customer: {
     buildVars: customerVars,

@@ -54,6 +54,21 @@ function unwrapToRecord(responseBody: ApiRecord): ApiRecord {
 }
 
 /**
+ * Map one record, keeping `Array.map`'s index argument away from the mapper.
+ *
+ * `autoMapTransaction` takes an optional `isCardIssuer` second parameter, so
+ * passing it to `map` directly would hand it the element index as that flag.
+ * These call sites have no institution declaration to give it, and rely on the
+ * mapper's own payload fallback.
+ *
+ * @param raw - Provider record.
+ * @returns Mapped transaction, or false when the record is malformed.
+ */
+function mapOne(raw: ApiRecord): ITransaction | false {
+  return autoMapTransaction(raw);
+}
+
+/**
  * Extract transactions from an API response using stack-based
  * iterative hunt. Filters voided/summary rows. Maps to ITransaction.
  *
@@ -76,7 +91,7 @@ function extractTransactions(responseBody: ApiRecord): readonly ITransaction[] {
   const hunted = huntTransactions(inner);
   const items = normalizeBancsRecords(hunted);
   const valid = items.filter((r): boolean => !isVoidedTransaction(r));
-  const mapped = valid.map(autoMapTransaction);
+  const mapped = valid.map(mapOne);
   const kept = mapped.filter((t): t is ITransaction => t !== false);
   LOG.debug({ message: buildHuntSummary(items.length, valid.length, kept.length) });
   return kept;
@@ -120,7 +135,7 @@ function filterByCardIndex(body: ApiRecord, cardId: string): readonly ITransacti
     (item): boolean => !isVoidedTransaction(item) && String(item.cardIndex) === cardId,
   );
   if (matched.length === 0) return [];
-  const mapped = matched.map(autoMapTransaction);
+  const mapped = matched.map(mapOne);
   return mapped.filter((t): t is ITransaction => t !== false);
 }
 

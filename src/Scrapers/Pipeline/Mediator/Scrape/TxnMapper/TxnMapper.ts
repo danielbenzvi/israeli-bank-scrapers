@@ -70,17 +70,28 @@ function isVoidedTransaction(raw: ApiRecord): boolean {
 }
 
 /**
- * Negate amount for card transactions (charges are debits).
- * Isracard/Amex report positive amounts for charges — old scraper
- * negates them.
+ * Flip a card issuer's sign convention to the caller-facing one.
+ *
+ * Card issuers report a charge as a positive number — "you owe 122.17" — while
+ * consumers expect spend to be negative. So the sign is INVERTED, not forced.
+ *
+ * `-Math.abs(amount)` was wrong: a refund arrives from the issuer as a negative
+ * number, and forcing the sign turned it straight back into a charge. A charge
+ * and its later refund therefore both mapped to charges, so the refunded money
+ * never came back. Inverting handles both directions, and matches what the
+ * per-institution scrapers in the original `israeli-bank-scrapers` do
+ * (`chargedAmount: -actualPaymentAmount`).
+ *
  * @param amount - Raw amount from API.
  * @param isCardTxn - Whether this is a card company transaction.
- * @returns Negated amount for cards, original for banks.
+ * @returns Sign-inverted amount for cards, original for banks.
  */
 function maybeNegateAmount(amount: number, isCardTxn: boolean): number {
   if (!isCardTxn) return amount;
+  // Guarded so zero cannot become -0, which serialises as "-0" and is unequal
+  // to a stored 0 under Object.is.
   if (amount === 0) return 0;
-  return -Math.abs(amount);
+  return -amount;
 }
 
 /**
@@ -316,13 +327,20 @@ function rejectMappedTxn(dateStr: string, amtNum: number): false {
  * extractor can drop the record with a LOUD log instead of letting
  * an empty-date / NaN-amount txn propagate silently.
  * @param raw - Raw transaction record from API response.
+ * @param isCardIssuer - Whether the institution is a card issuer, so charges
+ *   need their sign flipped. Falls back to a payload sniff when omitted.
  * @returns Mapped transaction, or false on malformed record.
  */
-function autoMapTransaction(raw: ApiRecord): ITransaction | false {
+function autoMapTransaction(raw: ApiRecord, isCardIssuer?: boolean): ITransaction | false {
   const fields = extractRawTxnFields(raw);
   const dateStr = coerceString(fields.date, parseAutoDate);
   const procStr = coerceString(fields.processedDate, parseAutoDate, dateStr);
-  const isCard = Boolean(fields.voidField);
+  // Prefer what the institution declares. The `voidField` fallback is the
+  // original inference and is kept only for callers that pass nothing: it
+  // detects a field only some issuers send, so it silently answers "bank" for
+  // every other card issuer and leaves their charges positive — i.e. recorded
+  // as money received. See IApiDirectScrapeShape.isCardIssuer.
+  const isCard = isCardIssuer ?? Boolean(fields.voidField);
   const amounts = computeAmounts(raw, fields, isCard);
   if (!isMappableTxn(dateStr, amounts.amtNum)) return rejectMappedTxn(dateStr, amounts.amtNum);
   return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields });
