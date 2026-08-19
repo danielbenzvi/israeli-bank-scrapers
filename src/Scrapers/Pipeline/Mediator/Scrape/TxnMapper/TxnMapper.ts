@@ -21,6 +21,7 @@ import {
 } from '../AutoMapperFacade/AutoMapperTypes.js';
 import { findFieldValue } from '../BfsFieldSearch/BfsFieldSearch.js';
 import { coerceNumber, coerceString, parseAutoDate } from '../Coercion/Coercion.js';
+import restoreProviderFields from './RestoredFields.js';
 import { signCardAmounts } from './TxnSign.js';
 
 const LOG = getDebug(import.meta.url);
@@ -118,6 +119,8 @@ interface IRawTxnFields {
   identifier: ScalarFieldHit;
   currency: ScalarFieldHit;
   voidField: ScalarFieldHit;
+  category: ScalarFieldHit;
+  chargedCurrency: ScalarFieldHit;
 }
 
 /**
@@ -158,6 +161,8 @@ const RAW_FIELD_LOOKUPS = {
   identifier: WK.identifier,
   currency: WK.currency,
   voidField: WK.voidIndicators,
+  category: WK.category,
+  chargedCurrency: WK.chargedCurrency,
 } as const satisfies Readonly<Record<keyof IRawTxnFields, readonly string[]>>;
 
 /** Tuple shape produced by `Object.entries(RAW_FIELD_LOOKUPS)` for {@link extractRawTxnFields}. */
@@ -224,11 +229,34 @@ function resolveTxnSuffix(
   return { originalCurrency: normalizeCurrency(rawCurr), identifier: rawId || undefined };
 }
 
+/**
+ * Resolve the optional descriptive fields the WK aliases now reach.
+ *
+ * `chargedCurrency` is normalised through the same path as `originalCurrency`,
+ * so a provider that sends the symbol "₪" yields `ILS` like every other
+ * currency field instead of leaking the symbol to the caller.
+ *
+ * @param fields - Raw scalar hits (category + charged currency).
+ * @returns Enrichment bundle ready to spread into the final txn.
+ */
+function resolveTxnEnrichment(
+  fields: IRawTxnFields,
+): Pick<ITransaction, 'category' | 'chargedCurrency'> {
+  const category = coerceString(fields.category).trim();
+  const charged = coerceString(fields.chargedCurrency).trim();
+  return {
+    category: category || undefined,
+    chargedCurrency: charged === '' ? undefined : normalizeCurrency(charged),
+  };
+}
+
 /** Bundled args for {@link buildTxnBase} and {@link buildMappedTxn}. */
 interface IBuildTxnInput {
   readonly dates: IDateStrings;
   readonly amounts: IResolvedAmounts;
   readonly fields: IRawTxnFields;
+  /** Backing record, for the fields the WK aliases do not cover. */
+  readonly raw: ApiRecord;
 }
 
 /** Transaction shape minus the fields {@link resolveTxnSuffix} owns. */
@@ -258,12 +286,19 @@ function buildTxnBase(input: IBuildTxnInput): ITxnBase {
  * primitives. Pure mapping — no coercion or validation beyond
  * the currency normalisation + identifier sanitisation already
  * performed upstream.
+ *
+ * {@link restoreProviderFields} is spread last and returns only the keys it
+ * actually found, so it can supply the optional fields the WK aliases do not
+ * reach without overwriting anything the mapper resolved itself.
+ *
  * @param input - Bundled dates + amounts + raw fields.
  * @returns Mapped transaction.
  */
 function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const base = buildTxnBase(input);
-  return { ...base, ...resolveTxnSuffix(input.fields) };
+  const restored = restoreProviderFields(input.raw, base.type);
+  const suffix = resolveTxnSuffix(input.fields);
+  return { ...base, ...suffix, ...resolveTxnEnrichment(input.fields), ...restored };
 }
 
 /**
@@ -303,7 +338,7 @@ function autoMapTransaction(raw: ApiRecord, isCardIssuer?: boolean): ITransactio
   const isCard = isCardIssuer ?? Boolean(fields.voidField);
   const amounts = computeAmounts(raw, fields, isCard);
   if (!isMappableTxn(dateStr, amounts.amtNum)) return rejectMappedTxn(dateStr, amounts.amtNum);
-  return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields });
+  return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields, raw });
 }
 
 export { autoMapTransaction, isVoidedTransaction };
