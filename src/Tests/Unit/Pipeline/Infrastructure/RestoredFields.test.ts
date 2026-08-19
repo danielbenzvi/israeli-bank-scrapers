@@ -35,6 +35,15 @@ describe('restoreProviderFields', () => {
     expect(mapped({ moreInfo: 'NOTE TEXT' }).memo).toBe('NOTE TEXT');
   });
 
+  it('does not set a memo from a blank note, and trims a padded one', () => {
+    // Isracard and Amex send `moreInfo` as a run of spaces on rows that carry
+    // no note — 100 of 173 and 99 of 172 rows in the captured runs — so an
+    // exact `=== ''` emptiness test turns most rows into a whitespace memo.
+    expect(mapped({ moreInfo: '   ' }).memo).toBeUndefined();
+    expect(mapped({ moreInfo: '\t\n ' }).memo).toBeUndefined();
+    expect(mapped({ moreInfo: '  NOTE TEXT ' }).memo).toBe('NOTE TEXT');
+  });
+
   it('flattens a nested beneficiary block into a single-line memo', () => {
     const txn = mapped({
       beneficiaryDetailsData: {
@@ -53,6 +62,18 @@ describe('restoreProviderFields', () => {
 
   it('recovers the charged currency', () => {
     expect(mapped({ debCrdCurrencySymbol: 'USD' }).chargedCurrency).toBe('USD');
+  });
+
+  it('normalises a charged-currency symbol to its ISO code', () => {
+    // Every one of the 1305 captured CAL rows sends "₪" here, so a value that
+    // skipped normalisation would leak the symbol on essentially every row
+    // while the sibling `currency` field on the same row reads "ILS".
+    const symbols = ['₪', 'שח', 'ש"ח', 'NIS'];
+    const codes = symbols.map((debCrdCurrencySymbol): string | undefined => {
+      return mapped({ debCrdCurrencySymbol }).chargedCurrency;
+    });
+    const allIls = symbols.map((): string => 'ILS');
+    expect(codes).toEqual(allIls);
   });
 
   it('marks a provisional row pending rather than settled', () => {
@@ -91,15 +112,41 @@ describe('restoreProviderFields', () => {
     );
   });
 
-  it('honours an explicit non-instalment transaction-type code', () => {
-    // Code 5 is a regular charge; without this the presence of a type code
-    // alone would be read as an instalment plan.
-    expect(mapped({ trnTypeCode: '5', debCrdDate: '2026-03-02' }).type).toBe(
-      TransactionTypes.Normal,
-    );
-    expect(mapped({ trnTypeCode: '8', debCrdDate: '2026-03-02' }).type).toBe(
-      TransactionTypes.Installments,
-    );
+  it('does not read a transaction-type code as an instalment plan', () => {
+    // Regression guard for the CAL type-code rule this fix removes. Its codes
+    // classify the KIND of charge, not the payment structure: in a 1305-row
+    // capture, 6 is a refund (זיכוי) and 7 a cash withdrawal (משיכת מזומן).
+    // Treating "not 5 and not 9" as a plan marker labelled all nine such rows
+    // `Installments` while leaving `installments` absent — a transaction that
+    // contradicts itself. Ordinals alone classify all 1305 rows correctly.
+    const codes = ['5', '6', '7', '8', '9'];
+    const types = codes.map((trnTypeCode): TransactionTypes => {
+      return mapped({ trnTypeCode, debCrdDate: '2026-03-02' }).type;
+    });
+    const allNormal = codes.map((): TransactionTypes => TransactionTypes.Normal);
+    expect(types).toEqual(allNormal);
+  });
+
+  it('still reports a genuine CAL plan, which carries its own ordinals', () => {
+    // The one real plan in that capture is code 8, and it sends numOfPayments —
+    // so the ordinals it already carries are what classify it.
+    const txn = mapped({
+      trnTypeCode: '8',
+      debCrdDate: '2026-03-02',
+      numOfPayments: 3,
+      curPaymentNum: 2,
+    });
+    expect(txn.type).toBe(TransactionTypes.Installments);
+    expect(txn.installments).toEqual({ number: 2, total: 3 });
+  });
+
+  it('never reports an instalment type without the ordinals to back it', () => {
+    const codes = ['5', '6', '7', '8', '9'];
+    const contradictions = codes.filter((trnTypeCode): boolean => {
+      const txn = mapped({ trnTypeCode, debCrdDate: '2026-03-02' });
+      return txn.type === TransactionTypes.Installments && txn.installments === undefined;
+    });
+    expect(contradictions).toEqual([]);
   });
 
   it('leaves every restored field absent when the payload has none of them', () => {

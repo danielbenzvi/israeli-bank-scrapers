@@ -40,6 +40,28 @@ See [Architecture → BALANCE-RESOLVE](../architecture/balance-resolve.md) for t
 
 Test coverage: [`EmptyGateHeuristic.test.ts`](https://github.com/sergienko4/israeli-bank-scrapers/blob/{{BRANCH}}/src/Tests/Unit/Pipeline/Mediator/Scrape/EmptyGateHeuristic.test.ts).
 
+## Provider annotation fields
+
+`.action` parses each raw row through the shared auto-mapper, which resolves
+canonical `ITransaction` fields by looking up a cross-bank alias dictionary
+rather than branching per bank. Alongside the date/amount/description core,
+providers ship descriptive fields — a free-text note, their own category, and
+the currency the account was actually billed in.
+
+Those three are grouped in `PROVIDER_ANNOTATION_FIELDS`
+([`ScrapeProviderFields.ts`](https://github.com/sergienko4/israeli-bank-scrapers/blob/{{BRANCH}}/src/Scrapers/Pipeline/Registry/WK/ScrapeProviderFields.ts)),
+spread into the WK transaction dictionary. Reach for it when an institution
+sends an annotation the mapper currently drops: adding the provider's key to
+the matching list is a one-line change, and no mapper code needs to know which
+bank sent it. Each alias is annotated with the captured-row count that
+justifies it, and the module records why the remaining institutions need none.
+
+Aliases must be evidence-backed. A key that resolves for the wrong provider
+publishes a misleading value on every one of its rows — `paymentCurrency` is
+documented there as the worked example.
+
+Test coverage: [`ProviderFieldCoverage.test.ts`](https://github.com/sergienko4/israeli-bank-scrapers/blob/{{BRANCH}}/src/Tests/Unit/Pipeline/Infrastructure/ProviderFieldCoverage.test.ts).
+
 ## Forensic audit observability
 
 `.post` invokes [`logForensicAudit`](../observability/forensic-audit.md) which emits the per-account `--- Account <masked> | <N> txns ---` line. Same hook runs in [API-DIRECT-SCRAPE.post](api-direct-scrape.md) so every scrape path produces the same diagnostic.

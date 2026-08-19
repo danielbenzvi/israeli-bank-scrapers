@@ -6,6 +6,9 @@
 // ID-field tuples are split into {@link ./ScrapeIdFields.js} to keep
 // this module under the 150-line max-lines ceiling.
 import { DISPLAY_ID_FIELDS, QUERY_ID_FIELDS } from './ScrapeIdFields.js';
+// Provider-annotation aliases (memo/category/chargedCurrency) are split into
+// {@link ./ScrapeProviderFields.js} for the same reason.
+import PROVIDER_ANNOTATION_FIELDS from './ScrapeProviderFields.js';
 
 /** WellKnown response status field names. */
 export const PIPELINE_WELL_KNOWN_RESPONSE_FIELDS = {
@@ -194,6 +197,7 @@ export const PIPELINE_WELL_KNOWN_TXN_FIELDS = {
     'israelAbroadVouchersList',
   ],
   direction: ['creditDebit', 'direction', 'debitCreditIndicator'],
+  ...PROVIDER_ANNOTATION_FIELDS,
   voidIndicators: ['dealSumType'],
   voucherFields: ['voucherNumberRatz', 'voucherNumberRatzOutbound'],
   shekelAliases: ['שח', 'ש"ח', 'NIS', '₪'],

@@ -119,6 +119,8 @@ interface IRawTxnFields {
   identifier: ScalarFieldHit;
   currency: ScalarFieldHit;
   voidField: ScalarFieldHit;
+  category: ScalarFieldHit;
+  chargedCurrency: ScalarFieldHit;
 }
 
 /**
@@ -159,6 +161,8 @@ const RAW_FIELD_LOOKUPS = {
   identifier: WK.identifier,
   currency: WK.currency,
   voidField: WK.voidIndicators,
+  category: WK.category,
+  chargedCurrency: WK.chargedCurrency,
 } as const satisfies Readonly<Record<keyof IRawTxnFields, readonly string[]>>;
 
 /** Tuple shape produced by `Object.entries(RAW_FIELD_LOOKUPS)` for {@link extractRawTxnFields}. */
@@ -225,6 +229,27 @@ function resolveTxnSuffix(
   return { originalCurrency: normalizeCurrency(rawCurr), identifier: rawId || undefined };
 }
 
+/**
+ * Resolve the optional descriptive fields the WK aliases now reach.
+ *
+ * `chargedCurrency` is normalised through the same path as `originalCurrency`,
+ * so a provider that sends the symbol "₪" yields `ILS` like every other
+ * currency field instead of leaking the symbol to the caller.
+ *
+ * @param fields - Raw scalar hits (category + charged currency).
+ * @returns Enrichment bundle ready to spread into the final txn.
+ */
+function resolveTxnEnrichment(
+  fields: IRawTxnFields,
+): Pick<ITransaction, 'category' | 'chargedCurrency'> {
+  const category = coerceString(fields.category).trim();
+  const charged = coerceString(fields.chargedCurrency).trim();
+  return {
+    category: category || undefined,
+    chargedCurrency: charged === '' ? undefined : normalizeCurrency(charged),
+  };
+}
+
 /** Bundled args for {@link buildTxnBase} and {@link buildMappedTxn}. */
 interface IBuildTxnInput {
   readonly dates: IDateStrings;
@@ -272,7 +297,8 @@ function buildTxnBase(input: IBuildTxnInput): ITxnBase {
 function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const base = buildTxnBase(input);
   const restored = restoreProviderFields(input.raw, base.type);
-  return { ...base, ...resolveTxnSuffix(input.fields), ...restored };
+  const suffix = resolveTxnSuffix(input.fields);
+  return { ...base, ...suffix, ...resolveTxnEnrichment(input.fields), ...restored };
 }
 
 /**
