@@ -40,11 +40,12 @@ type AcctsAcc = Procedure<readonly IAccountResult[]>;
 /**
  * Map raw rows through autoMapTransaction (drops rejects).
  * @param raws - Raw rows emitted by the shape's extractPage.
+ * @param isCardIssuer - Declared by the shape; decides charge-sign handling.
  * @returns Mapped ITransactions (rejects filtered out).
  */
-function mapTxns(raws: readonly object[]): readonly ITransaction[] {
+function mapTxns(raws: readonly object[], isCardIssuer?: boolean): readonly ITransaction[] {
   const widened = raws as unknown as readonly Record<string, unknown>[];
-  const mapped = widened.map(autoMapTransaction);
+  const mapped = widened.map((raw): ITransaction | false => autoMapTransaction(raw, isCardIssuer));
   return mapped.filter((t): t is ITransaction => t !== false);
 }
 
@@ -60,7 +61,7 @@ async function fetchAccountTxns<TAcct, TCursor>(
   const stop = buildStop(a);
   const paged = await fetchPaginated<object, TCursor>({ fetchPage, stop });
   if (!isOk(paged)) return paged;
-  const mapped = mapTxns(paged.value);
+  const mapped = mapTxns(paged.value, a.shape.isCardIssuer);
   return succeed(mapped);
 }
 

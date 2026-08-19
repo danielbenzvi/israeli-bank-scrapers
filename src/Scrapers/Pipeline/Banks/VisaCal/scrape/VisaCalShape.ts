@@ -51,6 +51,8 @@ function jsonHeaders(): HeaderMap {
 const VISACAL_SHAPE: IApiDirectScrapeShape<IVisaCalCard, number> = {
   stepName: 'VisaCalScrape',
   accountNumberOf,
+  // A card issuer: charges arrive positive and the mapper flips them.
+  isCardIssuer: true,
   customer: {
     buildVars: customerVars,
     extractAccounts: extractCards,

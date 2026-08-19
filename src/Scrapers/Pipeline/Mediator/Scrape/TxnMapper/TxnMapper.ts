@@ -21,6 +21,7 @@ import {
 } from '../AutoMapperFacade/AutoMapperTypes.js';
 import { findFieldValue } from '../BfsFieldSearch/BfsFieldSearch.js';
 import { coerceNumber, coerceString, parseAutoDate } from '../Coercion/Coercion.js';
+import { signCardAmounts } from './TxnSign.js';
 
 const LOG = getDebug(import.meta.url);
 
@@ -70,20 +71,6 @@ function isVoidedTransaction(raw: ApiRecord): boolean {
 }
 
 /**
- * Negate amount for card transactions (charges are debits).
- * Isracard/Amex report positive amounts for charges — old scraper
- * negates them.
- * @param amount - Raw amount from API.
- * @param isCardTxn - Whether this is a card company transaction.
- * @returns Negated amount for cards, original for banks.
- */
-function maybeNegateAmount(amount: number, isCardTxn: boolean): number {
-  if (!isCardTxn) return amount;
-  if (amount === 0) return 0;
-  return -Math.abs(amount);
-}
-
-/**
  * Resolve amount — single field or split debit/credit netting.
  * Generic: if WK.amount not found, falls back to credit - debit.
  * @param raw - Raw transaction record.
@@ -97,21 +84,6 @@ function resolveAmount(raw: ApiRecord, singleAmount: ScalarFieldHit): number {
   const debitNum = coerceNumber(debit, 0);
   const creditNum = coerceNumber(credit, 0);
   return creditNum - debitNum;
-}
-
-/**
- * Apply WK.direction sign convention. Debit indicators flip a positive
- * amount to negative; missing / non-debit directions leave the amount
- * untouched.
- * @param raw - Raw transaction record.
- * @param amount - Amount already resolved via resolveAmount + maybeNegateAmount.
- * @returns Sign-corrected amount.
- */
-function applyDirectionWk(raw: ApiRecord, amount: number): number {
-  const direction = findFieldValue(raw, WK.direction);
-  if (typeof direction !== 'string') return amount;
-  if (!/^debit$/i.test(direction)) return amount;
-  return -Math.abs(amount);
 }
 
 /**
@@ -219,23 +191,22 @@ function extractRawTxnFields(raw: ApiRecord): IRawTxnFields {
 }
 
 /**
- * Compute the signed charged + original amounts. Runs the
- * card-negation + direction-WK pipeline on both `amount` and
- * `originalAmount`, falling back to `amount` for `originalAmount`
- * when the record omits it.
+ * Compute the signed charged + original amounts.
+ *
+ * `originalAmount` falls back to the RAW charged amount when the record
+ * omits it. Seeding it from the already-negated value instead left the two
+ * fields with opposite signs, and would now also manufacture a false sign
+ * disagreement in {@link signCardAmounts}.
+ *
  * @param raw - Raw API record (needed for direction-WK lookup).
  * @param fields - Pre-extracted scalar hits.
- * @param isCard - True for Isracard/Amex (debit-as-positive).
+ * @param isCard - True when the institution declares itself a card issuer.
  * @returns Signed amounts ready to assign to the mapped txn.
  */
 function computeAmounts(raw: ApiRecord, fields: IRawTxnFields, isCard: boolean): IResolvedAmounts {
-  const rawAmt = resolveAmount(raw, fields.amount);
-  const negAmt = maybeNegateAmount(rawAmt, isCard);
-  const amtNum = applyDirectionWk(raw, negAmt);
-  const rawOrig = coerceNumber(fields.originalAmount, amtNum);
-  const negOrig = maybeNegateAmount(rawOrig, isCard);
-  const origNum = applyDirectionWk(raw, negOrig);
-  return { amtNum, origNum };
+  const amount = resolveAmount(raw, fields.amount);
+  const original = coerceNumber(fields.originalAmount, amount);
+  return signCardAmounts({ raw, amount, original, isCard });
 }
 
 /**
@@ -316,13 +287,20 @@ function rejectMappedTxn(dateStr: string, amtNum: number): false {
  * extractor can drop the record with a LOUD log instead of letting
  * an empty-date / NaN-amount txn propagate silently.
  * @param raw - Raw transaction record from API response.
+ * @param isCardIssuer - Whether the institution is a card issuer, so charges
+ *   need their sign flipped. Falls back to a payload sniff when omitted.
  * @returns Mapped transaction, or false on malformed record.
  */
-function autoMapTransaction(raw: ApiRecord): ITransaction | false {
+function autoMapTransaction(raw: ApiRecord, isCardIssuer?: boolean): ITransaction | false {
   const fields = extractRawTxnFields(raw);
   const dateStr = coerceString(fields.date, parseAutoDate);
   const procStr = coerceString(fields.processedDate, parseAutoDate, dateStr);
-  const isCard = Boolean(fields.voidField);
+  // Prefer what the institution declares. The `voidField` fallback is the
+  // original inference and is kept only for callers that pass nothing: it
+  // detects a field only some issuers send, so it silently answers "bank" for
+  // every other card issuer and leaves their charges positive — i.e. recorded
+  // as money received. See IApiDirectScrapeShape.isCardIssuer.
+  const isCard = isCardIssuer ?? Boolean(fields.voidField);
   const amounts = computeAmounts(raw, fields, isCard);
   if (!isMappableTxn(dateStr, amounts.amtNum)) return rejectMappedTxn(dateStr, amounts.amtNum);
   return buildMappedTxn({ dates: { date: dateStr, processedDate: procStr }, amounts, fields });
