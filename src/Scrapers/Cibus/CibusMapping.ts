@@ -4,9 +4,15 @@ import {
   TransactionStatuses,
   TransactionTypes,
 } from '../../Transactions.js';
-import { type ScraperOptions } from '../Base/Interface.js';
+import ScraperErrorTypes from '../Base/ErrorTypes.js';
+import { type IScraperScrapingResult, type ScraperOptions } from '../Base/Interface.js';
 import ScraperError from '../Base/ScraperError.js';
-import { DEVICE_COOKIE_PREFIX } from './Config/CibusApiConfig.js';
+import {
+  BLOCKED_STATUSES,
+  DEVICE_COOKIE_PREFIX,
+  RATE_LIMITED_STATUS,
+  REJECTED_STATUS,
+} from './Config/CibusApiConfig.js';
 
 /**
  * One row of the provider's purchase feed, as the provider sent it.
@@ -144,13 +150,137 @@ export function isAuthenticated(status: number): boolean {
 }
 
 /**
- * Rows the provider has excluded (cancelled/refunded) must not count.
+ * Turn a rejected auth status into the most specific verdict it supports.
+ *
+ * THE 401 IS AMBIGUOUS, AND IS REPORTED AS SUCH. A reCAPTCHA v3 score is
+ * returned only to the site owner's own backend, never to the page, so a token
+ * scored too low arrives as exactly the 401 a wrong password gives. Calling
+ * that `InvalidPassword` asserts a distinction nothing here can make — and the
+ * verdict is acted on downstream, where it asks a person to re-enter a
+ * password that may have been right all along.
+ *
+ * THE OTHERS ARE NOT AMBIGUOUS, so they are read rather than folded into the
+ * same answer. Declining to over-claim on the 401 is not a reason to discard
+ * the signals that are unambiguous — a rate limit in particular is the
+ * provider telling us to slow down, which no person needs to be woken for.
+ *
+ * AN UNKNOWN STATUS STAYS UNKNOWN. Mapping it to the nearest familiar verdict
+ * is how a provider's change to its own vocabulary turns into a confident
+ * wrong answer instead of a visible one.
+ * @param status - The provider's HTTP status for the rejected step.
+ * @returns The categorised failure.
+ */
+export function authFailureFor(status: number): IScraperScrapingResult {
+  const isBlocked = BLOCKED_STATUSES.includes(status);
+  if (isBlocked) {
+    const errorMessage = 'provider reports this account as blocked';
+    return { success: false, errorType: ScraperErrorTypes.AccountBlocked, errorMessage };
+  }
+  const errorMessage = authFailureMessage(status);
+  const errorType = authFailureType(status);
+  return { success: false, errorType, errorMessage };
+}
+
+/**
+ * The error type for a rejected auth status that is not an account block.
+ *
+ * A RATE LIMIT IS A TRANSPORT CONDITION, NOT A CREDENTIAL ONE, and it is typed
+ * as such. `NetworkError` is the existing type whose meaning is "the request
+ * did not get through; try later", which is exactly what a 429 says — and
+ * consumers already route that away from anything that troubles a person.
+ * Reporting it generically instead would leave a rate limit indistinguishable
+ * from a rejected password to every consumer, which is how being throttled
+ * ends up asking someone to re-enter a password that was never wrong.
+ *
+ * Deliberately NOT a new member on the shared error enum. Thirteen scrapers
+ * share that type, and one source's needs do not justify widening a surface
+ * they all consume — particularly in a fork whose intended path is upstream.
+ * @param status - The provider's HTTP status for the rejected step.
+ * @returns The type that carries the most meaning this status supports.
+ */
+function authFailureType(status: number): ScraperErrorTypes {
+  if (status === RATE_LIMITED_STATUS) return ScraperErrorTypes.NetworkError;
+  return ScraperErrorTypes.Generic;
+}
+
+/**
+ * The message for a rejected auth status that is not an account block.
+ * @param status - The provider's HTTP status for the rejected step.
+ * @returns A message naming what is known, and what is not.
+ */
+function authFailureMessage(status: number): string {
+  if (status === RATE_LIMITED_STATUS) {
+    return 'provider is rate limiting this account — not a credential failure';
+  }
+  if (status === REJECTED_STATUS) {
+    return 'authentication rejected — credentials or captcha score, indistinguishable here';
+  }
+  return `authentication failed with an unrecognised provider status (${String(status)})`;
+}
+
+/** The provider's own values for `is_active`, in both forms it may send them. */
+const LIVE_VALUES: readonly unknown[] = [1, '1'];
+const EXCLUDED_VALUES: readonly unknown[] = [0, '0'];
+
+/** What the provider's `is_active` field says about one row. */
+export type DealActivity = 'live' | 'excluded' | 'unknown';
+
+/**
+ * Read the provider's activity flag, refusing to guess at a value it has never
+ * sent.
+ *
+ * BOTH FORMS ARE ACCEPTED ON PURPOSE. The provider's own schema declares this
+ * field a string and its rows carry numbers, so either could arrive without
+ * the provider considering anything to have changed. A guard written against
+ * the declared type would reject correct data; one written against the
+ * observed type breaks the day they ship what their schema promises.
+ *
+ * WHY NOT `Number(value) !== 0`. That is what this replaces, and it fails
+ * OPEN: any value that will not parse becomes `NaN`, `NaN !== 0` is true, and
+ * a row the provider may have excluded is counted instead. An exclusion that
+ * fails open is the more dangerous direction — it is silent, and it is
+ * indistinguishable from having nothing to exclude.
+ * @param value - The provider's raw field value.
+ * @returns Whether the row is live, excluded, or carries a value we do not know.
+ */
+export function readActivity(value: unknown): DealActivity {
+  if (LIVE_VALUES.includes(value)) return 'live';
+  if (EXCLUDED_VALUES.includes(value)) return 'excluded';
+  return 'unknown';
+}
+
+/**
+ * Rows the provider has excluded (cancelled/refunded) must not count, and
+ * neither must rows whose flag we cannot read.
  * @param deal - A raw purchase row.
  * @returns True when the row represents a live purchase.
  */
 export function isCountable(deal: ICibusDeal): boolean {
-  const active = Number(deal.is_active);
-  return active !== 0;
+  return readActivity(deal.is_active) === 'live';
+}
+
+/** Purchase rows split by what the provider's activity flag says about them. */
+export interface IActivityPartition {
+  countable: ICibusDeal[];
+  excluded: number;
+  unknown: number;
+}
+
+/**
+ * Split rows by activity, counting what was dropped.
+ *
+ * The counts are the point. Dropping an unreadable row silently would leave
+ * "the provider changed this field" looking exactly like "there was nothing to
+ * exclude" — so the caller reports how many rows it could not read, and a
+ * change in the provider's vocabulary surfaces as itself.
+ * @param deals - Every purchase row fetched.
+ * @returns The countable rows, and how many were dropped for each reason.
+ */
+export function partitionByActivity(deals: ICibusDeal[]): IActivityPartition {
+  const countable = deals.filter(deal => readActivity(deal.is_active) === 'live');
+  const excluded = deals.filter(deal => readActivity(deal.is_active) === 'excluded').length;
+  const unknown = deals.length - countable.length - excluded;
+  return { countable, excluded, unknown };
 }
 
 /**
@@ -246,7 +376,7 @@ function toDealExtra(deal: ICibusDeal): Readonly<Record<string, unknown>> {
  * `accountNumber` is a stable synthetic label, never the provider's own card
  * identifier: the consumer keys stored rows on its own account id, and the real
  * identifier is sensitive.
- * @param deals - Every purchase row fetched.
+ * @param deals - The countable purchase rows, already partitioned by activity.
  * @param budget - The budget block from the last response that carried one.
  * @param options - Scraper options, threaded to the row mapper.
  * @returns One account with its transactions.
@@ -256,8 +386,10 @@ export function toAccount(
   budget: ICibusBudget,
   options: ScraperOptions,
 ): ITransactionsAccount {
-  const countable = deals.filter(isCountable);
-  const txns = countable.map(deal => toTransaction(deal, options));
+  // Already partitioned by the caller, which is what lets it report how many
+  // rows it had to drop. Filtering here as well would hide that count behind a
+  // second, silent pass.
+  const txns = deals.map(deal => toTransaction(deal, options));
   const balance = toAccountBalance(budget);
   return { accountNumber: 'cibus', ...balance, providerExtra: toAccountExtra(budget), txns };
 }

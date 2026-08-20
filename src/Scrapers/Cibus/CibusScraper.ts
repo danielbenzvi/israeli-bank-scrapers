@@ -7,30 +7,29 @@ import ScraperErrorTypes from '../Base/ErrorTypes.js';
 import { type IScraperScrapingResult } from '../Base/Interface.js';
 import ScraperError from '../Base/ScraperError.js';
 import {
+  authFailureFor,
+  type IActivityPartition,
   type IBrowserCookie,
   type ICibusBudget,
   type ICibusBudgetResponse,
   type ICibusDataResponse,
+  type ICibusDeal,
   isAuthenticated,
   isDeviceCookie,
   isProviderCookie,
+  partitionByActivity,
   splitCookie,
   toAccount,
   toCookieHeader,
 } from './CibusMapping.js';
+import { INJECT_RECAPTCHA, MINT_WITH_KEY, READ_ENTERPRISE_FLAG } from './CibusPageScripts.js';
+import cibusPostInPage, { postOptions } from './CibusPost.js';
+import { resolveSiteKey, type SiteKeyProvenance } from './CibusSiteKey.js';
+import { collectWindows, type IDateWindow, pauseBetweenWindows } from './CibusWindows.js';
 import {
-  ENSURE_RECAPTCHA,
-  MINT_WITH_KEY,
-  READ_ENTERPRISE_FLAG,
-  READ_SITE_KEY,
-} from './CibusPageScripts.js';
-import cibusPostInPage, { type ICibusPostOptions } from './CibusPost.js';
-import {
-  APPLICATION_ID,
   AUTH_TOKEN_URL,
   DATA_URL,
   DEVICE_COOKIE_TIMEOUT_MS,
-  FALLBACK_SITE_KEY,
   isAllowedUrl,
   OTP_REQUIRED_STATUS,
   PORTAL_URL,
@@ -55,67 +54,27 @@ interface ICibusCredentials {
   otpLongTermToken?: string;
 }
 
+/** A site key and where it came from — the provider's page, or our pinned copy. */
+interface ISiteKeyResolution {
+  key: string;
+  provenance: SiteKeyProvenance;
+}
+
+/**
+ * The provider's answer to "does this employer use the company field?".
+ *
+ * Shape taken from the provider's own front end, which reads exactly this path
+ * and coerces it to a boolean before deciding whether to require the field.
+ */
+interface ICibusCompanyFieldResponse {
+  data?: { showCompanyField?: boolean };
+}
+
 /** Result of an auth step: authenticated, or challenged for a code. */
 interface IAuthOutcome {
   status: number;
   maskedInput?: string;
   userInput1?: string;
-}
-
-/** A date range in the provider's own format. */
-interface IDateWindow {
-  from: string;
-  to: string;
-}
-
-/**
- * Build the in-page POST options every request shares.
- * @param data - JSON body.
- * @returns Options for the in-page fetch helper.
- */
-function postOptions(data: Record<string, unknown>): ICibusPostOptions {
-  // Sent the way the provider's own front end sends them. `application-id` in
-  // particular is not optional: without it the API answers a valid session with
-  // an empty result rather than an error, which reads as "no transactions".
-  const extraHeaders = {
-    'Content-Type': 'application/json',
-    accept: 'application/json, text/plain, */*',
-    'accept-language': 'he',
-    'application-id': APPLICATION_ID,
-  };
-  return { data, extraHeaders };
-}
-
-/**
- * Clamp one calendar month to the configured scrape range.
- * @param cursor - The month being emitted.
- * @param start - Earliest date the caller asked for.
- * @param end - Latest date the caller asked for.
- * @returns The clamped window, in the provider's date format.
- */
-function toWindow(cursor: moment.Moment, start: moment.Moment, end: moment.Moment): IDateWindow {
-  const monthStart = cursor.clone().startOf('month');
-  const monthEnd = cursor.clone().endOf('month');
-  const from = moment.max(monthStart, start);
-  const to = moment.min(monthEnd, end);
-  return { from: from.format('DD/MM/YYYY'), to: to.format('DD/MM/YYYY') };
-}
-
-/**
- * Walk the configured range one calendar month at a time.
- * @param start - Earliest date the caller asked for.
- * @param end - Latest date the caller asked for.
- * @returns One window per month, clamped to the range.
- */
-function collectWindows(start: moment.Moment, end: moment.Moment): IDateWindow[] {
-  const cursor = start.clone().startOf('month');
-  const windows: IDateWindow[] = [];
-  while (cursor.isSameOrBefore(end, 'month')) {
-    const window = toWindow(cursor, start, end);
-    windows.push(window);
-    cursor.add(1, 'month');
-  }
-  return windows;
 }
 
 /**
@@ -124,6 +83,14 @@ function collectWindows(start: moment.Moment, end: moment.Moment): IDateWindow[]
  * the intent is legible at both the producer and the poller.
  */
 const NOT_YET = undefined;
+
+/**
+ * Said when the provider requires a company identifier this account has not
+ * been given one for. Its own condition, because the provider rejects a
+ * missing company exactly as it rejects a wrong password.
+ */
+const MISSING_COMPANY_MESSAGE =
+  'this employer requires a company identifier, and none is configured';
 
 /**
  * Report a code the provider declined.
@@ -164,6 +131,18 @@ function rejectedOtp(): IScraperScrapingResult {
  */
 class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
   /**
+   * The site key for this login, resolved once.
+   *
+   * RESOLVED ONCE, AND NEVER RE-READ. Every mint in a login uses this one
+   * value. Re-reading per attempt would be worse than wasteful: once we have
+   * injected our own script tag carrying the pinned key, a later read matches
+   * that tag and hands the pinned key back as though the page had supplied
+   * it — so the mechanism meant to notice a key rotation would confirm our own
+   * copy instead. A probe must not read back what it wrote.
+   */
+  private _siteKey?: ISiteKeyResolution;
+
+  /**
    * Authenticate against the provider and establish a session.
    * @param credentials - Username, password, optional company and device token.
    * @returns Success, or a categorised failure.
@@ -171,6 +150,8 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
   public async login(credentials: ICibusCredentials): Promise<IScraperScrapingResult> {
     const prepared = await this.prepareLoginPage(credentials);
     if (!prepared.success) return prepared;
+    const resolved = await this.resolveSiteKeyOnce();
+    if (!resolved.success) return resolved;
     const authed = await this.authenticate(credentials);
     if (!authed.success) return authed;
     return this.captureSession();
@@ -181,14 +162,97 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * @returns Accounts with transactions.
    */
   protected async fetchData(): Promise<IScraperScrapingResult> {
-    const windows = this.monthWindows();
-    const requests = windows.map(async window => this.fetchWindow(window));
-    const pages = await Promise.all(requests);
-    const deals = pages.flatMap(page => page?.list ?? []);
+    const deals = await this.fetchAllWindows();
     const budget = await this.fetchBudget();
-    this.bankLog.debug('fetched %d rows', deals.length);
-    const account = toAccount(deals, budget, this.options);
+    const partition = partitionByActivity(deals);
+    this.reportPartition(deals.length, partition);
+    const account = toAccount(partition.countable, budget, this.options);
     return { success: true, accounts: [account] };
+  }
+
+  /**
+   * Resolve the site key for this login, and record where it came from.
+   * @returns Success once a usable key is held, else a categorised failure.
+   */
+  private async resolveSiteKeyOnce(): Promise<IScraperScrapingResult> {
+    const resolution = await resolveSiteKey(this.page);
+    if (resolution.outcome === 'unusable') {
+      return createGenericError(`reCAPTCHA site key unusable (source: ${resolution.provenance})`);
+    }
+    this.bankLog.debug('site key resolved from %s', resolution.provenance);
+    this._siteKey = resolution;
+    return { success: true };
+  }
+
+  /**
+   * Report what was fetched and what was dropped.
+   *
+   * The dropped counts are reported rather than merely acted on: a provider
+   * that changes this field's vocabulary would otherwise look exactly like one
+   * with nothing to exclude.
+   * @param fetched - How many rows arrived.
+   * @param partition - The rows split by what their activity flag said.
+   * @returns Nothing.
+   */
+  private reportPartition(fetched: number, partition: IActivityPartition): void {
+    this.bankLog.debug(
+      'fetched %d rows (countable %d, provider-excluded %d, unreadable-activity %d)',
+      fetched,
+      partition.countable.length,
+      partition.excluded,
+      partition.unknown,
+    );
+  }
+
+  /**
+   * Fetch every month window, one at a time, with a pause between them.
+   *
+   * SEQUENTIAL ON PURPOSE. These went out concurrently, which put a burst of
+   * simultaneous requests on a provider that scores request behaviour through
+   * reCAPTCHA — and a low score is rejected with the same opaque status a
+   * wrong password gives, so the cost of looking automated is a failure nobody
+   * can diagnose. Every other legacy scraper here fetches its windows in
+   * sequence.
+   *
+   * Expressed as a chained reduction rather than a loop with an `await` in it,
+   * which is the shape this repository's rules ask for and reads as what it
+   * is: each window waits for the one before.
+   * @returns Every purchase row across all windows, unfiltered.
+   */
+  private async fetchAllWindows(): Promise<ICibusDeal[]> {
+    const windows = this.monthWindows();
+    const empty: Promise<ICibusDeal[]> = Promise.resolve([]);
+    /**
+     * One link of the chain, bound to this scraper.
+     * @param previous - Rows from the windows already fetched.
+     * @param window - The window to fetch now.
+     * @param index - Its position, so the first window waits for nothing.
+     * @returns The accumulated rows, including this window's.
+     */
+    const step = async (
+      previous: Promise<ICibusDeal[]>,
+      window: IDateWindow,
+      index: number,
+    ): Promise<ICibusDeal[]> => this.appendWindow(previous, window, index);
+    return windows.reduce<Promise<ICibusDeal[]>>(step, empty);
+  }
+
+  /**
+   * Wait for the rows so far, pause, then fetch one more window's worth.
+   * @param previous - Rows from the windows already fetched.
+   * @param window - The window to fetch now.
+   * @param index - Its position, so the first window waits for nothing.
+   * @returns The accumulated rows, including this window's.
+   */
+  private async appendWindow(
+    previous: Promise<ICibusDeal[]>,
+    window: IDateWindow,
+    index: number,
+  ): Promise<ICibusDeal[]> {
+    const soFar = await previous;
+    if (index > 0) await pauseBetweenWindows();
+    const page = await this.fetchWindow(window);
+    return [...soFar, ...(page?.list ?? [])];
   }
 
   /**
@@ -207,9 +271,8 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * @returns Success once authenticated, else a categorised failure.
    */
   private async authenticate(credentials: ICibusCredentials): Promise<IScraperScrapingResult> {
-    const precheck = await this.mintRecaptchaToken(RECAPTCHA_ACTION_PRECHECK);
-    if (precheck === '') return createTimeoutError('reCAPTCHA token could not be minted');
-    await this.postShowCompanyField(credentials, precheck);
+    const precheck = await this.checkCompanyRequirement(credentials);
+    if (!precheck.success) return precheck;
     // A SECOND token, freshly minted and bound to the login action. Not an
     // optimisation to skip: v3 tokens are single-use and the precheck above has
     // already spent that one.
@@ -217,6 +280,29 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
     if (loginToken === '') return createTimeoutError('reCAPTCHA token could not be minted');
     const outcome = await this.submitPassword(credentials, loginToken);
     return this.resolveAuthOutcome(outcome);
+  }
+
+  /**
+   * Ask the provider whether this employer needs a company, and check we have
+   * one if it does.
+   *
+   * Reported as the distinct condition it is. Sending an empty company to an
+   * employer that requires one is rejected identically to a wrong password, so
+   * a household with a perfectly good credential would be sent to re-enter
+   * it — and the single-use token spent learning this would have bought
+   * nothing.
+   * @param credentials - The scraper credentials.
+   * @returns Success when the login may proceed, else a categorised failure.
+   */
+  private async checkCompanyRequirement(
+    credentials: ICibusCredentials,
+  ): Promise<IScraperScrapingResult> {
+    const token = await this.mintRecaptchaToken(RECAPTCHA_ACTION_PRECHECK);
+    if (token === '') return createTimeoutError('reCAPTCHA token could not be minted');
+    const isCompanyRequired = await this.postShowCompanyField(credentials, token);
+    const isSatisfied = !isCompanyRequired || (credentials.company ?? '') !== '';
+    if (isSatisfied) return { success: true };
+    return createGenericError(MISSING_COMPANY_MESSAGE);
   }
 
   /**
@@ -242,11 +328,7 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
     if (outcome.status === OTP_REQUIRED_STATUS) return this.answerChallenge(outcome);
     const isAuthed = isAuthenticated(outcome.status);
     if (isAuthed) return { success: true };
-    // Deliberately NOT distinguishing "wrong password" from "captcha score too
-    // low": the provider returns an identical 401 for both, and guessing
-    // between them would be a claim the response cannot support.
-    const errorMessage = 'authentication rejected — credentials or captcha score';
-    return { success: false, errorType: ScraperErrorTypes.InvalidPassword, errorMessage };
+    return authFailureFor(outcome.status);
   }
 
   /**
@@ -267,15 +349,19 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * Ask the provider whether this employer needs the `company` field.
    * @param credentials - The scraper credentials.
    * @param token - A freshly minted reCAPTCHA token.
-   * @returns True once the call has been made.
+   * @returns True when this employer requires the `company` field.
    */
   private async postShowCompanyField(
     credentials: ICibusCredentials,
     token: string,
   ): Promise<boolean> {
     const body = { userLoginName: credentials.username, reCAPTCHAToken: token };
-    await this.post(SHOW_COMPANY_FIELD_URL, body);
-    return true;
+    // The ANSWER is the point of this call. It previously returned a hardcoded
+    // true and discarded the response, which spent a single-use token to learn
+    // something and then threw it away — and left the caller unable to tell a
+    // missing company field from a bad password.
+    const res = await this.post<ICibusCompanyFieldResponse>(SHOW_COMPANY_FIELD_URL, body);
+    return res?.data?.showCompanyField === true;
   }
 
   /**
@@ -481,30 +567,20 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
    * @returns The token, or undefined while the provider's script is absent.
    */
   private async tryMintToken(action: string): Promise<typeof NOT_YET | string> {
-    const siteKey = await this.resolveSiteKey();
-    const isReady = await this.page.evaluate(ENSURE_RECAPTCHA, siteKey).catch(() => false);
+    const resolved = this._siteKey;
+    if (resolved === undefined) return NOT_YET;
+    const siteKey = resolved.key;
+    // Injection only matters where the provider's own application never
+    // brought reCAPTCHA up; where it did, this returns true without touching
+    // the page. Either way the key was resolved before any of it, so nothing
+    // here can be read back later as though the page had supplied it.
+    const isReady = await this.page.evaluate(INJECT_RECAPTCHA, siteKey).catch(() => false);
     if (!isReady) return NOT_YET;
     // Tab-joined rather than an object: the argument crosses into the page
     // realm, and a primitive is the least there is to go wrong in transit.
     const pair = `${siteKey}\t${action}`;
     const minted = await this.page.evaluate(MINT_WITH_KEY, pair).catch(() => '');
     return minted === '' ? NOT_YET : minted;
-  }
-
-  /**
-   * The provider's public site key — from the live page when its application
-   * has loaded, otherwise the pinned fallback.
-   *
-   * Reading it first means a rotation is picked up automatically; falling back
-   * means a page whose application never boots is still usable. The fallback is
-   * logged every time, so a rotation cannot hide behind it.
-   * @returns The site key to mint against.
-   */
-  private async resolveSiteKey(): Promise<string> {
-    const fromPage = await this.page.evaluate(READ_SITE_KEY).catch(() => '');
-    if (fromPage !== '') return fromPage;
-    this.bankLog.debug('site key not present in page — using pinned fallback');
-    return FALLBACK_SITE_KEY;
   }
 
   /**

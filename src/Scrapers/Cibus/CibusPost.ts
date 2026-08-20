@@ -27,6 +27,8 @@
  */
 import type { Frame, Page } from 'playwright-core';
 
+import { APPLICATION_ID } from './Config/CibusApiConfig.js';
+
 /** What the in-page fetch hands back across the boundary. */
 type PostTuple = readonly [text: string, status: number];
 
@@ -41,6 +43,24 @@ export interface ICibusPostResult {
   status: number;
   /** Parsed JSON body, or undefined when the response carried none. */
   envelope: unknown;
+}
+
+/**
+ * Build the in-page POST options every request shares.
+ * @param data - JSON body.
+ * @returns Options for the in-page fetch helper.
+ */
+export function postOptions(data: Record<string, unknown>): ICibusPostOptions {
+  // Sent the way the provider's own front end sends them. `application-id` in
+  // particular is not optional: without it the API answers a valid session with
+  // an empty result rather than an error, which reads as "no transactions".
+  const extraHeaders = {
+    'Content-Type': 'application/json',
+    accept: 'application/json, text/plain, */*',
+    'accept-language': 'he',
+    'application-id': APPLICATION_ID,
+  };
+  return { data, extraHeaders };
 }
 
 /** Arguments crossing into the page. Flat, because they are serialised. */
