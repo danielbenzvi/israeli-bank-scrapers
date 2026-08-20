@@ -107,6 +107,66 @@ export const RECAPTCHA_ACTION_LOGIN = 'login';
  */
 export const RECAPTCHA_READY_TIMEOUT_MS = 30_000;
 
+/**
+ * How long to wait for the provider's OWN application to boot before falling
+ * back to the pinned key.
+ *
+ * The site key reaches the DOM only after the provider's front end boots and
+ * its captcha library appends Google's script; the served HTML is a bare
+ * application shell carrying no reCAPTCHA reference at all. A reader that runs
+ * before boot therefore finds nothing — which is not the provider hiding the
+ * key, only us looking too early.
+ *
+ * Deliberately shorter than {@link RECAPTCHA_READY_TIMEOUT_MS}: exhausting it
+ * is not a failure, it means the pinned key is used, and the whole remaining
+ * budget is still available for the mint itself.
+ */
+export const APP_BOOT_TIMEOUT_MS = 10_000;
+
+/**
+ * Shape a reCAPTCHA site key must have before this scraper will mint with it.
+ *
+ * The key is read from a page we do not control and is then interpolated into
+ * a script URL, so it is validated rather than trusted. A value that fails
+ * this is reported as its own condition — without the check, a stray quote
+ * throws inside the page, the caller's `catch` swallows it, and the whole
+ * login times out thirty seconds later naming nothing.
+ */
+export const SITE_KEY_PATTERN = /^[\w-]{20,60}$/;
+
+/**
+ * Pacing between the month-window requests.
+ *
+ * The provider scores request behaviour through reCAPTCHA v3, and a burst is
+ * exactly the shape that scores badly. Every other legacy scraper here fetches
+ * its windows one after another; this one fanned all of them out at once,
+ * which made it the outlier among its own siblings.
+ *
+ * Declared here rather than imported from the Pipeline timing helpers: those
+ * belong to a different architecture, and importing across that boundary would
+ * couple the two in the direction this repository is migrating away from.
+ */
+export const WINDOW_DELAY_MIN_MS = 300;
+export const WINDOW_DELAY_MAX_MS = 1_200;
+
+/**
+ * Provider statuses this scraper can tell apart — and the one it cannot.
+ *
+ * Read from the provider's own front end, which assigns its `errorCode`
+ * straight from the HTTP status: `401` rejected credentials, `429` too many
+ * requests, `311`/`403` user blocked.
+ *
+ * **The provider exposes no captcha-specific code.** A reCAPTCHA v3 score is
+ * returned only to the site owner's own backend, never to the page, so a token
+ * scored too low arrives as the same `401` a wrong password gives — for this
+ * scraper and for the provider's own login screen alike. Anything not listed
+ * here is reported as unrecognised rather than mapped to the nearest familiar
+ * verdict.
+ */
+export const REJECTED_STATUS = 401;
+export const RATE_LIMITED_STATUS = 429;
+export const BLOCKED_STATUSES: readonly number[] = [311, 403];
+
 /** How long to wait for the ~30-day device token to appear after auth. */
 export const DEVICE_COOKIE_TIMEOUT_MS = 15_000;
 

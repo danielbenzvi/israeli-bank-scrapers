@@ -57,30 +57,50 @@ const READ_RENDER_PARAM = (source: string): string => {
 };
 
 /**
- * Ensure Google's reCAPTCHA script is present, and report whether it is usable
- * YET.
+ * Report whether reCAPTCHA is usable right now. Changes nothing.
  *
- * WHY NOT JUST WAIT FOR THE PAGE. The provider's Angular app is what normally
- * loads this script, and under some browser configurations that app never
- * boots — the document is the bare shell, and waiting simply times out. But
- * the app is not what we need. reCAPTCHA only requires the script and the
- * right origin, both of which we have without a single line of the provider's
- * application running.
+ * Split out from the injector below so the two questions stay separate: "has
+ * the provider's own application brought this up yet?" and "should we bring it
+ * up ourselves?" are different decisions, and the caller now makes the second
+ * one only after the first has been given time to answer itself.
+ * @returns True when `grecaptcha.execute` is callable now.
+ */
+export const IS_RECAPTCHA_READY = (): boolean => {
+  const scope = globalThis as unknown as IPageScope;
+  return scope.grecaptcha?.execute !== undefined;
+};
+
+/**
+ * Load Google's reCAPTCHA script ourselves, for a page whose own application
+ * never brought it up.
+ *
+ * WHEN THIS RUNS, AND WHY IT STILL EXISTS. The provider's application normally
+ * loads this script, and when it does, the caller reads the site key from the
+ * tag that application appended and never comes here at all. Under some
+ * browser configurations that application does not boot — the document stays a
+ * bare shell — and waiting alone would simply time out. reCAPTCHA itself needs
+ * only the script and the right origin, both available without a line of the
+ * provider's own code running.
  *
  * This is Google's own script at Google's own URL, exactly as the page would
  * have requested it. Nothing is faked or worked around.
  *
- * DELIBERATELY DOES NOT WAIT. The caller already polls this on an interval, so
- * waiting here too would be a second timeout loop with its own timeout, in a
- * realm that cannot use the project's own waiting helpers. Injecting and
- * reporting readiness leaves exactly one place that decides how long to wait.
+ * THE KEY IS ESCAPED, NOT TRUSTED. It may have come from a page we do not
+ * control, and it is being interpolated into a URL. The caller validates its
+ * shape first; this escapes it again at the point of use, because the two
+ * checks protect against different mistakes and neither makes the other
+ * redundant.
+ *
+ * DELIBERATELY DOES NOT WAIT. The caller polls, so waiting here too would be a
+ * second timeout loop inside a realm that cannot use this project's waiting
+ * helpers.
  * @param siteKey - The public site key to load the script for.
- * @returns True when `grecaptcha.execute` is callable now.
+ * @returns True when the script tag is now present.
  */
-export const ENSURE_RECAPTCHA = (siteKey: string): boolean => {
+export const INJECT_RECAPTCHA = (siteKey: string): boolean => {
   const scope = globalThis as unknown as IPageScope;
   if (scope.grecaptcha?.execute) return true;
-  const src = `https://www.google.com/recaptcha/api.js?render=${siteKey}`;
+  const src = `https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(siteKey)}`;
   const alreadyRequested = scope.document.querySelector(`script[src="${src}"]`);
   if (!alreadyRequested) ADD_SCRIPT(scope, src);
   return false;
