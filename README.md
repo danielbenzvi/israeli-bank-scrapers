@@ -64,6 +64,8 @@ Playwright, and TypeScript strict mode.
 
 - [Why this fork](#why-this-fork)
 - [Requirements](#requirements)
+  - [Tested Node versions](#tested-node-versions)
+- [Roadmap: Node 24 will become the minimum](#roadmap-node-24-will-become-the-minimum)
 - [Supported institutions](#supported-institutions)
 - [OTP (two-factor authentication)](#otp-two-factor-authentication)
 - [What you get back](#what-you-get-back)
@@ -105,6 +107,35 @@ Playwright, and TypeScript strict mode.
 | Install scripts | must be allowed | `--ignore-scripts` breaks the native build — see [Troubleshooting](https://sergienko4.github.io/israeli-bank-scrapers/troubleshooting/) |
 
 Windows, macOS, and Linux are all supported.
+
+### Tested Node versions
+
+`engines.node` advertises a range; these are the versions CI actually runs the
+full unit suite against on every pull request. Anything outside this list may
+work, but nothing here proves it.
+
+<!-- node-support:start -->
+| Node | Why this leg |
+| --- | --- |
+| `22.14.0` | The declared minimum in `engines.node` — the oldest version we promise |
+| `22` | Latest 22.x, so a patched LTS cannot regress us unnoticed |
+| `24` | Latest 24.x, so the open-ended `>=` is an evidenced claim, not a hope |
+<!-- node-support:end -->
+
+`npm run lint:node-support` fails the build if this table, `.nvmrc`,
+`engines.node` and the CI matrix ever disagree.
+
+### Roadmap: Node 24 will become the minimum
+
+Node 22 entered [maintenance](https://github.com/nodejs/release#release-schedule)
+on 2025-10-21 and reaches **end-of-life on 2027-04-30**. Node 24 has been Active
+LTS since 2025-10-28. A future **major** release will therefore raise
+`engines.node` to `>= 24` and retire the `22.x` rows above.
+
+Nothing breaks before then: `>= 22.14.0` stays valid for every `8.x` release, and
+the table above is build-enforced, so the floor cannot move without this section
+moving with it. If you are choosing a Node version for a new deployment today,
+choose 24.
 
 ## Supported institutions
 
