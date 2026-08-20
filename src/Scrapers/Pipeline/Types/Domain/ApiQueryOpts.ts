@@ -11,6 +11,10 @@ interface IApiQueryOpts {
   readonly extraHeaders?: Record<string, string>;
   readonly query?: Record<string, string>;
   readonly onSetCookie?: (setCookies: readonly string[]) => number;
+  /** Abort the request after this many ms. Absent means no timeout. */
+  readonly timeoutMs?: number;
+  /** Send the request the way the site's own SPA would. See IFetchOpts. */
+  readonly firstPartyContract?: boolean;
 }
 
 export type { IApiQueryOpts };

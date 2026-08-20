@@ -160,7 +160,14 @@ describe('AmexShape transactions', () => {
     };
     const ctx = ctxWith(new Date(2000, 0, 1), 0);
     const page = txnsExtractPage({ body, cursor: false, acct: CARD, ctx });
-    expect(page.items).toEqual([{ id: 'a1' }, { id: 'v1' }, { id: 'v2' }]);
+    // Rows now carry which container they came from — once merged, an
+    // approval (pending authorisation) is otherwise indistinguishable from a
+    // voucher (settled charge). Provider fields are untouched.
+    expect(page.items).toEqual([
+      { id: 'a1', __rowProvenance: { rowClass: 'approval' } },
+      { id: 'v1', __rowProvenance: { rowClass: 'voucher' } },
+      { id: 'v2', __rowProvenance: { rowClass: 'voucher' } },
+    ]);
     expect(page.nextCursor).toBe(1);
   });
 

@@ -26,6 +26,8 @@ import {
   noVars,
   primeUrl,
 } from './IsracardShapeHelpers.js';
+import { buildDetailEnrichHook } from '../../DigitalV3/DetailEnrichHook.js';
+import { ISRACARD_API } from './IsracardShapeHelpers.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './IsracardShapeTxns.js';
 
 /**
@@ -58,6 +60,10 @@ const ISRACARD_SHAPE: IApiDirectScrapeShape<IIsracardCard, number> = {
   accountNumberOf,
   // A card issuer: charges arrive positive and the mapper flips them.
   isCardIssuer: true,
+  // Per-transaction detail, when the caller configures it. Isracard and Amex
+  // are one company on one API backbone, so this is the same endpoint and the
+  // same loop, differing only by host.
+  enrichRows: buildDetailEnrichHook(ISRACARD_API),
   prime: { navUrl: primeUrl },
   customer: {
     buildVars: customerVars,
