@@ -1,5 +1,5 @@
 /**
- * DigitalV3 per-transaction detail — the request loop.
+ * DigitalV3 transaction-details enrichment — the request loop.
  *
  * Shared by Isracard and Amex, which are one company on one API backbone,
  * differing only by domain.
@@ -21,16 +21,16 @@ import type { Procedure } from '../../Types/Procedure.js';
 import { isOk } from '../../Types/Procedure.js';
 import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import {
-  AMEX_DETAIL_SCHEMA_VERSION,
+  DIGITALV3_DETAIL_SCHEMA_VERSION,
   classifyDetailTransport,
   type IDetailOutcome,
   interpretDetailEnvelope,
-} from './DetailInterpret.js';
+} from './TransactionDetailInterpret.js';
 import {
   type IDetailBudgetLimits,
   nextDetailRequest,
   retryFits,
-} from './DetailBudget.js';
+} from './TransactionDetailBudget.js';
 
 /** Identity of the account being scraped, for deriving stable fingerprints. */
 export interface IDetailIdentityContext {
@@ -96,7 +96,7 @@ function notAttempted(code: IDetailOutcome['outcomeCode']): IDetailOutcome {
   return {
     state: 'terminal-failure',
     outcomeCode: code,
-    detailSchemaVersion: AMEX_DETAIL_SCHEMA_VERSION,
+    detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION,
     attemptCount: 0,
   };
 }
@@ -195,7 +195,7 @@ async function fetchOneDetail(
       outcome: {
         state: verdict.state,
         outcomeCode: verdict.code,
-        detailSchemaVersion: AMEX_DETAIL_SCHEMA_VERSION,
+        detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION,
         attemptCount: 1,
       },
       stopPass: verdict.stopPass,

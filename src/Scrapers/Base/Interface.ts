@@ -7,7 +7,7 @@ import type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.
 import type { IOutputDataOptions } from './Interfaces/OutputDataOptions.js';
 import type { IScraperLoginResult } from './Interfaces/ScraperLoginResult.js';
 import type { IScraperScrapingResult } from './Interfaces/ScraperScrapingResult.js';
-import type { ICardDetailOptions } from '../Pipeline/Banks/DigitalV3/DetailEnrich.js';
+import type { ICardDetailOptions } from '../Pipeline/Banks/DigitalV3/TransactionDetailEnrich.js';
 
 export type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.js';
 export type { IErrorResult } from './Interfaces/ErrorResult.js';

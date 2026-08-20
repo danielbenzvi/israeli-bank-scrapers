@@ -1,11 +1,11 @@
 /**
- * Amex scrape shape — the `enrichRows` hook.
+ * DigitalV3 transaction-details enrichment — the `enrichRows` hook.
  *
  * Adapts the generic hook the driver calls to the detail loop's injected
  * collaborators: a POST bound to this scrape's mediator, the clock, the sleep,
- * and the pacing jitter. Kept out of AmexShape.ts to hold the file-size cap,
- * and out of AmexDetailEnrich.ts so that file stays free of pipeline types and
- * remains testable without any of them.
+ * and the pacing jitter. Kept out of each bank's Shape.ts to hold the file-size
+ * cap, and out of TransactionDetailEnrich.ts so that file stays free of
+ * pipeline types and remains testable without any of them.
  */
 
 import type { IEnrichRowsContext } from '../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
@@ -14,7 +14,7 @@ import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail } from '../../Types/Procedure.js';
 import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
-import { enrichCardDetail } from './DetailEnrich.js';
+import { enrichCardDetail } from './TransactionDetailEnrich.js';
 import { literalUrl } from '../../Registry/WK/UrlsWK.js';
 
 /** A card as both DigitalV3 banks describe it — the shapes are identical. */

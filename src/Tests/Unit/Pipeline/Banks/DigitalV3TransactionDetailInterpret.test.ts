@@ -11,10 +11,10 @@
  */
 
 import {
-  AMEX_DETAIL_SCHEMA_VERSION,
+  DIGITALV3_DETAIL_SCHEMA_VERSION,
   classifyDetailTransport,
   interpretDetailEnvelope,
-} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/DetailInterpret.js';
+} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/TransactionDetailInterpret.js';
 
 const envelope = (data: Record<string, unknown>) => ({ isSuccess: true, data });
 
@@ -82,7 +82,7 @@ describe('interpretDetailEnvelope', () => {
 
   it('stamps the schema version on every outcome', () => {
     for (const body of [null, envelope({ businessName: 'M' }), envelope({ businessName: 'M', branchDescription: 'C' })]) {
-      expect(interpretDetailEnvelope(body).detailSchemaVersion).toBe(AMEX_DETAIL_SCHEMA_VERSION);
+      expect(interpretDetailEnvelope(body).detailSchemaVersion).toBe(DIGITALV3_DETAIL_SCHEMA_VERSION);
     }
   });
 });

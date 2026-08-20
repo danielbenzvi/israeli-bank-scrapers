@@ -1,5 +1,6 @@
 /**
- * Amex per-transaction detail — the spending budget for one scrape pass.
+ * DigitalV3 transaction-details enrichment — the spending budget for one
+ * scrape pass.
  *
  * Pure arithmetic, separated from the request loop so the rules that stop us
  * hammering a rate-limited endpoint are testable without a browser.

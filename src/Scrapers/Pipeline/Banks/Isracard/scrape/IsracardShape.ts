@@ -26,7 +26,7 @@ import {
   noVars,
   primeUrl,
 } from './IsracardShapeHelpers.js';
-import { buildDetailEnrichHook } from '../../DigitalV3/DetailEnrichHook.js';
+import { buildDetailEnrichHook } from '../../DigitalV3/TransactionDetailEnrichHook.js';
 import { ISRACARD_API } from './IsracardShapeHelpers.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './IsracardShapeTxns.js';
 

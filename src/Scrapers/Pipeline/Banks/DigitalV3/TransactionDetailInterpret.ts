@@ -1,6 +1,6 @@
 /**
- * Amex per-transaction detail — interpreting one GetTransactionDetails
- * response.
+ * DigitalV3 transaction-details enrichment — interpreting one
+ * GetTransactionDetails response.
  *
  * Everything here is pure. The request loop that decides WHETHER to ask lives
  * in AmexDetailEnrich.ts; this file only answers "given a response, what did we
@@ -14,8 +14,17 @@
  *     transaction list itself reports only as a generic wallet label.
  */
 
-/** Version stamp on every outcome, so a stored result can be re-read safely after a shape change. */
-export const AMEX_DETAIL_SCHEMA_VERSION = 'amex-detail-v3';
+/**
+ * Version stamp on every outcome, so a stored result can be re-read safely
+ * after a shape change.
+ *
+ * The VALUE is frozen at its original Amex-era spelling on purpose. Consumers
+ * persist it beside each enriched row and query on equality to decide what
+ * still needs fetching, so changing the string would make every already-
+ * enriched transaction look unenriched and trigger a full re-fetch. Bump it
+ * only when the outcome shape genuinely changes.
+ */
+export const DIGITALV3_DETAIL_SCHEMA_VERSION = 'amex-detail-v3';
 
 /**
  * Wallet labels the transaction list uses for peer-to-peer transfers. A row
@@ -133,7 +142,7 @@ function isWalletTransfer(data: Record<string, unknown>): boolean {
  * @returns The outcome to store against the transaction.
  */
 export function interpretDetailEnvelope(envelope: unknown): IDetailOutcome {
-  const base = { detailSchemaVersion: AMEX_DETAIL_SCHEMA_VERSION, attemptCount: 1 } as const;
+  const base = { detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION, attemptCount: 1 } as const;
 
   if (typeof envelope !== 'object' || envelope === null) {
     return { ...base, state: 'schema-mismatch', outcomeCode: 'shape-mismatch' };
