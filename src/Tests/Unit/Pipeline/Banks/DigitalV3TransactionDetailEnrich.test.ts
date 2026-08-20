@@ -13,7 +13,7 @@ import {
   enrichCardDetail,
   type ICardDetailDeps,
   type ICardDetailOptions,
-} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/DetailEnrich.js';
+} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/TransactionDetailEnrich.js';
 import { fail, succeed } from '../../../../Scrapers/Pipeline/Types/Procedure.js';
 import { ScraperErrorTypes } from '../../../../Scrapers/Base/ErrorTypes.js';
 
