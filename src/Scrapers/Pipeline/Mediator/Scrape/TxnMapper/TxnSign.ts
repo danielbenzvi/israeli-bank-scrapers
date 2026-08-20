@@ -58,14 +58,36 @@ function maybeNegateAmount(amount: number, isCardTxn: boolean): number {
 }
 
 /**
- * Apply WK.direction sign convention. Debit indicators flip a positive
- * amount to negative; missing / non-debit directions leave the amount
+ * The code value meaning "money left the account".
+ *
+ * Kept beside the sign logic rather than in the WK registry because that
+ * registry is contractually a map of field NAMES; which value means outbound
+ * is a fact about the field's contents, not its name.
+ */
+const OUTBOUND_ACTIVITY_CODE = 2;
+
+/**
+ * Whether a numeric activity code marks this record as outbound.
+ *
+ * @param raw - Raw transaction record.
+ * @returns True when a known outbound code is present.
+ */
+function isOutboundByCode(raw: ApiRecord): boolean {
+  const code = findFieldValue(raw, WK.outboundCodeFields);
+  return Number(code) === OUTBOUND_ACTIVITY_CODE;
+}
+
+/**
+ * Apply the WK direction convention. Debit indicators flip a positive amount
+ * to negative, whether the bank spells the direction as a word or reports it
+ * as a numeric activity code; missing / non-debit directions leave the amount
  * untouched.
  * @param raw - Raw transaction record.
  * @param amount - Amount already resolved via resolveAmount + maybeNegateAmount.
  * @returns Sign-corrected amount.
  */
 function applyDirectionWk(raw: ApiRecord, amount: number): number {
+  if (isOutboundByCode(raw)) return -Math.abs(amount);
   const direction = findFieldValue(raw, WK.direction);
   if (typeof direction !== 'string') return amount;
   if (!/^debit$/i.test(direction)) return amount;

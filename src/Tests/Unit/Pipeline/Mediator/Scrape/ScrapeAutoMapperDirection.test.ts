@@ -1,6 +1,7 @@
 /**
  * ScrapeAutoMapper — WK.direction sign-convention tests.
- * Generic: any bank whose API emits DEBIT / CREDIT markers gets the correct sign.
+ * Generic: any bank whose API emits DEBIT / CREDIT markers gets the correct sign,
+ * whether it spells the direction as a word or reports it as a numeric code.
  * Back-compat: records without a direction field keep their sign unchanged.
  */
 
@@ -90,5 +91,61 @@ describe('ScrapeAutoMapper/WKDirection', () => {
     const txns = extractTransactions(envelope);
     expect(txns.length).toBe(1);
     expect(txns[0].chargedAmount).toBe(90);
+  });
+});
+
+/**
+ * Build one raw movement carrying a numeric activity code instead of a word.
+ * @param amount - Transaction amount, always a positive magnitude.
+ * @param code - Activity code as the bank reports it.
+ * @returns Envelope shape with a container the mapper can find.
+ */
+function buildCodedEnvelope(amount: number, code: unknown): Record<string, unknown> {
+  return {
+    movements: [
+      {
+        movementId: 'm-coded',
+        movementTimestamp: '2026-01-15T10:00:00',
+        movementAmount: amount,
+        eventActivityTypeCode: code,
+      },
+    ],
+  };
+}
+
+describe('ScrapeAutoMapper/NumericDirection', () => {
+  it('outbound code 2 inverts a positive magnitude to negative', () => {
+    const envelope = buildCodedEnvelope(320, 2);
+    const txns = extractTransactions(envelope);
+    expect(txns.length).toBe(1);
+    expect(txns[0].chargedAmount).toBe(-320);
+  });
+
+  it('inbound code 1 leaves a positive magnitude positive', () => {
+    const envelope = buildCodedEnvelope(4500, 1);
+    const txns = extractTransactions(envelope);
+    expect(txns.length).toBe(1);
+    expect(txns[0].chargedAmount).toBe(4500);
+  });
+
+  it('an outbound code sent as a string still inverts', () => {
+    const envelope = buildCodedEnvelope(85, '2');
+    const txns = extractTransactions(envelope);
+    expect(txns.length).toBe(1);
+    expect(txns[0].chargedAmount).toBe(-85);
+  });
+
+  it('an unrelated code leaves the sign unchanged', () => {
+    const envelope = buildCodedEnvelope(60, 7);
+    const txns = extractTransactions(envelope);
+    expect(txns.length).toBe(1);
+    expect(txns[0].chargedAmount).toBe(60);
+  });
+
+  it('a non-numeric code leaves the sign unchanged', () => {
+    const envelope = buildCodedEnvelope(30, 'n/a');
+    const txns = extractTransactions(envelope);
+    expect(txns.length).toBe(1);
+    expect(txns[0].chargedAmount).toBe(30);
   });
 });
