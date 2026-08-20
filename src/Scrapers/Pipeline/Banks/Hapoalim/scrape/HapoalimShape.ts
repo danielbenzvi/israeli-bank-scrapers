@@ -24,10 +24,10 @@ import {
   type IHapoalimAcct,
   noVars,
 } from './HapoalimShapeHelpers.js';
-import { txnsExtractPage, txnsHeaders, txnsUrl, txnsVars } from './HapoalimShapeTxns.js';
+import { txnsExtractPage, txnsHeaders, txnsUrl, txnsVars, type HapoalimCursor } from './HapoalimShapeTxns.js';
 
 /** Hapoalim hard-model shape — passed to `.withBrowserApiDirect(...)`. */
-const HAPOALIM_SHAPE: IApiDirectScrapeShape<IHapoalimAcct, never> = {
+const HAPOALIM_SHAPE: IApiDirectScrapeShape<IHapoalimAcct, HapoalimCursor> = {
   stepName: 'HapoalimScrape',
   accountNumberOf,
   customer: {
