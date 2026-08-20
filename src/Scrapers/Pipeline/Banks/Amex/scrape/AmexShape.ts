@@ -25,7 +25,7 @@ import {
   noVars,
   primeUrl,
 } from './AmexShapeHelpers.js';
-import { buildDetailEnrichHook } from '../../DigitalV3/DetailEnrichHook.js';
+import { buildDetailEnrichHook } from '../../DigitalV3/TransactionDetailEnrichHook.js';
 import { AMEX_API } from './AmexShapeHelpers.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './AmexShapeTxns.js';
 
