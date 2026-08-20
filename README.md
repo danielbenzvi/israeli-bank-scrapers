@@ -139,7 +139,7 @@ choose 24.
 
 ## Supported institutions
 
-19 institutions. `CompanyTypes.<Name>` selects the bank; credential fields are
+20 institutions. `CompanyTypes.<Name>` selects the bank; credential fields are
 validated at runtime.
 
 | Institution | Type | Engine | Credentials |
@@ -163,14 +163,19 @@ validated at runtime.
 | Max | Credit card | Browser | `username`, `password` |
 | Visa Cal | Credit card | Browser | `username`, `password` |
 | PayBox (by Discount) | Wallet | API-direct | `phoneNumber`, OTP |
+| Cibus (Pluxee) | Benefit | Browser | `username`, `password`, OTP\*\* |
 
 \* Hapoalim prompts for OTP only on unrecognised devices.
+
+\*\* Cibus additionally takes an optional `company`, required by some
+employers and not others — the provider's own pre-auth call decides, so the
+scraper asks before sending credentials.
 
 Per-bank notes live in the
 [bank documentation](https://sergienko4.github.io/israeli-bank-scrapers/banks/).
 
-> **Legacy path:** Behatsdaa, Beyahad Bishvilha, and Mizrahi Bank still run on
-> the pre-pipeline scraper. They work through the same `createScraper(...)`
+> **Legacy path:** Behatsdaa, Beyahad Bishvilha, Cibus, and Mizrahi Bank still
+> run on the pre-pipeline scraper. They work through the same `createScraper(...)`
 > entry point and their public behaviour is preserved, but new features target
 > the pipeline architecture.
 
@@ -333,7 +338,7 @@ flowchart LR
       CALL["API-DIRECT-CALL<br/>(login + OTP via JSON API)"] --> SCR["API-DIRECT-SCRAPE"]
     end
 
-    subgraph LEG["Legacy banks (3) — Behatsdaa · Beyahad Bishvilha · Mizrahi"]
+    subgraph LEG["Legacy sources (4) — Behatsdaa · Beyahad Bishvilha · Cibus · Mizrahi"]
       direction LR
       LLOGIN["Declarative login"] --> LFETCH["Bank API or DOM parse"]
     end
@@ -350,11 +355,11 @@ list of REST/GraphQL calls — no post-login navigation, no DOM scraping. The
 API-direct banks reach that same phase through a headless JSON login instead of
 the browser prefix.
 
-The three legacy banks predate the phase chain. Behatsdaa and Mizrahi call the
-bank's API from the page; Beyahad Bishvilha still parses its transaction table
-out of the DOM. All three return the same `IScraperScrapingResult`, so callers
-cannot tell the difference — but they do not gain pipeline-only behaviour such
-as phase-scoped retries.
+The four legacy sources predate the phase chain. Behatsdaa, Cibus and Mizrahi
+call the provider's API from the page; Beyahad Bishvilha still parses its
+transaction table out of the DOM. All four return the same
+`IScraperScrapingResult`, so callers cannot tell the difference — but they do
+not gain pipeline-only behaviour such as phase-scoped retries.
 
 Phases never read one another's state; they communicate through typed fields on
 a shared context. See

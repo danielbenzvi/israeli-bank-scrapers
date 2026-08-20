@@ -51,6 +51,28 @@ export const SCRAPER_CONFIGURATION = {
       timing: NULL_TIMING,
       selectors: {},
     },
+    [CompanyTypes.Cibus]: {
+      urls: { base: 'https://consumers.pluxee.co.il', loginRoute: null, transactions: null },
+      api: {
+        ...NULL_API,
+        // Auth host. `purchaseHistory` is the data host — same slot Behatsdaa
+        // uses for its own purchase feed, reused rather than widening
+        // `IBankScraperConfig['api']` for one consumer.
+        base: 'https://api.capir.pluxee.co.il',
+        purchaseHistory: 'https://api.consumers.pluxee.co.il/api/main.py',
+      },
+      auth: NULL_AUTH,
+      loginSetup: SIMPLE_LOGIN,
+      // The provider sends DD/MM/YYYY. Recorded for reference only: this
+      // scraper passes the date string through VERBATIM and parses nothing,
+      // because the consumer owns the single parser for it. Parsing here would
+      // create a second one that silently disagrees for every day <= 12.
+      format: { ...NULL_FORMAT, date: 'DD/MM/YYYY' },
+      timing: NULL_TIMING,
+      // Deliberately empty. The login mints a reCAPTCHA token inside the page
+      // and then posts JSON; nothing navigates a form or parses rendered HTML.
+      selectors: {},
+    },
     [CompanyTypes.BeyahadBishvilha]: {
       urls: { base: 'https://www.hist.org.il', loginRoute: null, transactions: null },
       api: { ...NULL_API, card: 'https://www.hist.org.il/card/balanceAndUses' },
