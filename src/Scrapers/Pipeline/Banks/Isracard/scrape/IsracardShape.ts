@@ -17,6 +17,7 @@ import type {
   HeaderMap,
   IApiDirectScrapeShape,
 } from '../../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
+import { ISRACARD_DECLARED_ROWS } from './IsracardShapeExtract.js';
 import {
   accountNumberOf,
   customerUrl,
@@ -27,7 +28,6 @@ import {
   primeUrl,
 } from './IsracardShapeHelpers.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './IsracardShapeTxns.js';
-
 /**
  * Card-cycle balance — always 0 (Isracard exposes no account-level balance;
  * `balance.skipFetch` bypasses the fetch, extract reads {}). Module-private
@@ -74,9 +74,11 @@ const ISRACARD_SHAPE: IApiDirectScrapeShape<IIsracardCard, number> = {
   transactions: {
     buildVars: txnsVars,
     extractPage: txnsExtractPage,
+    windowNarrowing: 'periodEnumeration',
     urlTag: txnsUrl,
     method: 'POST',
     extraHeaders: digitalV3Headers,
+    declaredRowSpecs: ISRACARD_DECLARED_ROWS,
   },
 };
 

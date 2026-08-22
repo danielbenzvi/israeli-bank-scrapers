@@ -25,10 +25,12 @@ import type {
   IAesSignerConfig,
   JsonValueTemplate,
 } from '../../Mediator/ApiDirectCall/IApiDirectCallConfig.js';
+import type { IDeclaredRowSpec } from '../../Mediator/Scrape/CoverageAudit/DeclaredRows.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
 import type { IPage } from '../../Strategy/Fetch/Pagination.js';
 import type { IActionContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
+import type { WindowNarrowing } from '../../Types/WindowNarrowing.js';
 
 /** Opaque headers map (shape step may declare per-call extraHeaders). */
 export type HeaderMap = Record<string, string>;
@@ -160,10 +162,33 @@ export interface IExtractPageArgs<TAcct, TCursor> {
   readonly ctx: IActionContext;
 }
 
+/**
+ * How a bank's transactions request expresses the window's upper bound.
+ * Re-exported from `Types/WindowNarrowing.ts`, where it is shared with the
+ * Mediator that acts on the declaration.
+ */
+export type { WindowNarrowing } from '../../Types/WindowNarrowing.js';
+
 /** Transactions-step shape — paginated per-account fetch. */
 export interface IApiDirectScrapeTxnsStep<TAcct, TCursor> {
   readonly buildVars: (acct: TAcct, cursor: TCursor | false, ctx: IActionContext) => VarsMap;
   readonly extractPage: (args: IExtractPageArgs<TAcct, TCursor>) => IPage<object, TCursor>;
+  /**
+   * Whether a coverage gap on this bank can be backfilled by re-asking for an
+   * older slice. Required, so adding a bank without deciding is a compile
+   * error rather than a silent `undefined` that skips the backfill.
+   */
+  readonly windowNarrowing: WindowNarrowing;
+  /**
+   * Whether consecutive pages of this step's walk can re-serve the same rows.
+   *
+   * A shape whose cursor re-asks a boundary **inclusively** — the only way to
+   * recover rows a row-count cap withheld part-way through a day — receives
+   * rows it already holds. Declaring this makes the paginator drop them by raw
+   * row identity instead of concatenating. Absent means pages are disjoint and
+   * concatenation is safe, which is true of every date-chunked walk.
+   */
+  readonly pagesMayOverlap?: boolean;
   readonly stop?: (acc: readonly object[], ctx: IActionContext) => boolean;
   readonly extraHeaders?: ApiDirectScrapeHeadersLike;
   /** REST dispatch override; absent ⇒ GraphQL via apiQuery('transactions'). */
@@ -177,6 +202,48 @@ export interface IApiDirectScrapeTxnsStep<TAcct, TCursor> {
    * step's `buildVars` output bundled under `carry.<varName>`.
    */
   readonly bodyTemplate?: JsonValueTemplate;
+  /**
+   * Canonical field names that identify one row, enabling duplicate
+   * collapse for this bank. Absent ⇒ no dedup, which is the default.
+   *
+   * Opt-in because collapsing is destructive and no obvious key is
+   * safe: measured across captured traffic, `identifier` repeats
+   * across distinct rows on three of nine banks, and a
+   * date + amount + description composite collides on two more. A
+   * declared key therefore only nominates candidates — a row is
+   * removed only when its key *and* its full content match one
+   * already kept, and a key that matches while content differs is
+   * reported as mis-declared rather than acted on. See
+   * `Mediator/Scrape/TxnDedup.ts` for the measurements a bank needs
+   * to reproduce before declaring one.
+   */
+  readonly dedupKeyFields?: readonly string[];
+  /**
+   * Containers whose response states its own row count beside the rows,
+   * enabling authoritative loss detection for this bank. Absent ⇒ only the
+   * heuristic coverage audit applies, which is the default.
+   *
+   * A count is an oracle only when it sits beside the rows it counts.
+   * Response-level totals were measured and rejected: Isracard/Amex's
+   * `transactionsCount` summarises a whole billing cycle and never once
+   * matched the extracted row count, so checking against it would warn on
+   * every healthy run. See `Mediator/Scrape/CoverageAudit/DeclaredRows.ts`.
+   */
+  readonly declaredRowSpecs?: readonly IDeclaredRowSpec[];
+  /**
+   * Whether a hunted row belongs to this account.
+   *
+   * Declared only by banks whose response carries **every** account merged, so
+   * the per-account extractor legitimately returns a subset. Without it the
+   * coverage audit hunts the whole body and reports every *other* account's
+   * rows as loss — a WARN on every page of every run, forever.
+   *
+   * Absent means the response is already scoped to one account, which is the
+   * case for every bank but Max. Declared rather than inferred: whether a
+   * response is merged is part of a bank's hard model, not something the
+   * generic audit should guess at.
+   */
+  readonly auditOwnsRow?: (row: object, acct: TAcct) => boolean;
 }
 
 /** Balance fetch outcome: value + whether it came from `fallbackOnFail`. */

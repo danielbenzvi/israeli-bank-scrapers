@@ -44,6 +44,9 @@ function asOpts(args: IResolveAndEnrichArgs): ReturnType<typeof buildResolveOpts
 
 /**
  * Resolve and enrich; emit diagnostic and return.
+ * The match is vetted for fillability inside {@link probeAll}, tier by tier,
+ * so a text walk-up that landed on a link cannot masquerade as a credential
+ * box and cannot suppress the tiers that would have found the real input.
  * @param args - Bundled resolution arguments.
  * @returns Enriched field context.
  */

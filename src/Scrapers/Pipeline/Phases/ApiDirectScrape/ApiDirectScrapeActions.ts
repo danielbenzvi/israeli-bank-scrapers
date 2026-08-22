@@ -10,21 +10,19 @@
 import type { ITransaction, ITransactionsAccount } from '../../../../Transactions.js';
 import type { IApiMediator } from '../../Mediator/Api/ApiMediator.js';
 import { resolveApiMediator } from '../../Mediator/Api/ApiMediatorAccessor.js';
+import { reportMapRejects } from '../../Mediator/Scrape/CoverageAudit/MapRejects.js';
 import { autoMapTransaction } from '../../Mediator/Scrape/ScrapeAutoMapper.js';
-import { fetchPaginated } from '../../Strategy/Fetch/Pagination.js';
+import { applyStartWindow } from '../../Mediator/Scrape/StartWindow.js';
+import { collapseDuplicates } from '../../Mediator/Scrape/TxnDedup.js';
 import { isSome, some } from '../../Types/Option.js';
 import type { IActionContext, IScrapeState } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { isOk, succeed } from '../../Types/Procedure.js';
+import { collectAccountRows } from './ApiDirectScrapeBackfill.js';
 import runBootstrap from './ApiDirectScrapeBootstrap.js';
 import type { IAcctCtx, IDriverCtx } from './ApiDirectScrapeDispatchArgs.js';
 import runPrime from './ApiDirectScrapePrime.js';
-import {
-  buildPageFetcher,
-  buildStop,
-  fetchAccounts,
-  fetchBalance,
-} from './ApiDirectScrapeSteps.js';
+import { fetchAccounts, fetchBalance } from './ApiDirectScrapeSteps.js';
 import type { ApiDirectScrapeResult } from './ApiDirectScrapeTypes.js';
 import type { IApiDirectScrapeShape } from './IApiDirectScrapeShape.js';
 
@@ -50,19 +48,63 @@ function mapTxns(raws: readonly object[], isCardIssuer?: boolean): readonly ITra
 }
 
 /**
- * Fetch + map one account's paginated transactions.
+ * Map the shape's raw rows, reporting any the mapper refused.
+ *
+ * The refusals are reported here rather than swallowed because the shape found
+ * those rows and believed them transactions — a non-zero count is data that
+ * reached us and was dropped, which the totals alone would never reveal.
+ *
  * @param a - Per-account context.
- * @returns Mapped transactions procedure.
+ * @param raws - Raw rows emitted by the shape's extractPage.
+ * @param label - Bank + step identity for the log line.
+ * @returns The rows the mapper accepted.
+ */
+function mapAndReport<TAcct, TCursor>(
+  a: IAcctCtx<TAcct, TCursor>,
+  raws: readonly object[],
+  label: string,
+): readonly ITransaction[] {
+  const mapped = mapTxns(raws, a.shape.isCardIssuer);
+  reportMapRejects({ extracted: raws.length, mapped: mapped.length, label });
+  return mapped;
+}
+
+/**
+ * Refine one account's raw rows into the transactions the caller asked for.
+ *
+ * Reports the rows the mapper refused first, then collapses proven duplicates
+ * (opt-in; no bank declares a key today) and trims to the caller's `startDate`.
+ * Providers return whole billing cycles rather than a date range, so without
+ * the window the caller receives months of history it never asked for.
+ *
+ * @param a - Per-account context.
+ * @param raws - Raw rows emitted by the shape's extractPage.
+ * @returns Mapped, deduplicated, in-window transactions.
+ */
+function refineTxns<TAcct, TCursor>(
+  a: IAcctCtx<TAcct, TCursor>,
+  raws: readonly object[],
+): readonly ITransaction[] {
+  const label = `${a.ctx.companyId}/txns`;
+  const mapped = mapAndReport(a, raws, label);
+  const keyFields = a.shape.transactions.dedupKeyFields ?? [];
+  const unique = collapseDuplicates({ txns: mapped, keyFields, label });
+  return applyStartWindow({ txns: unique.kept, startDate: a.ctx.options.startDate, label }).kept;
+}
+
+/**
+ * Fetch + map one account's paginated transactions.
+ *
+ * @param a - Per-account context.
+ * @returns Mapped, in-window transactions procedure.
  */
 async function fetchAccountTxns<TAcct, TCursor>(
   a: IAcctCtx<TAcct, TCursor>,
 ): Promise<Procedure<readonly ITransaction[]>> {
-  const fetchPage = buildPageFetcher(a);
-  const stop = buildStop(a);
-  const paged = await fetchPaginated<object, TCursor>({ fetchPage, stop });
-  if (!isOk(paged)) return paged;
-  const mapped = mapTxns(paged.value, a.shape.isCardIssuer);
-  return succeed(mapped);
+  const collected = await collectAccountRows(a);
+  if (!isOk(collected)) return collected;
+  const refined = refineTxns(a, collected.value);
+  return succeed(refined);
 }
 
 /**

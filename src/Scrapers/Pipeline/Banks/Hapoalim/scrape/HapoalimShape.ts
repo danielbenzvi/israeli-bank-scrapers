@@ -24,10 +24,16 @@ import {
   type IHapoalimAcct,
   noVars,
 } from './HapoalimShapeHelpers.js';
-import { txnsExtractPage, txnsHeaders, txnsUrl, txnsVars } from './HapoalimShapeTxns.js';
+import {
+  type HapoalimCursor,
+  txnsExtractPage,
+  txnsHeaders,
+  txnsUrl,
+  txnsVars,
+} from './HapoalimShapeTxns.js';
 
 /** Hapoalim hard-model shape — passed to `.withBrowserApiDirect(...)`. */
-const HAPOALIM_SHAPE: IApiDirectScrapeShape<IHapoalimAcct, never> = {
+const HAPOALIM_SHAPE: IApiDirectScrapeShape<IHapoalimAcct, HapoalimCursor> = {
   stepName: 'HapoalimScrape',
   accountNumberOf,
   customer: {
@@ -45,6 +51,10 @@ const HAPOALIM_SHAPE: IApiDirectScrapeShape<IHapoalimAcct, never> = {
   transactions: {
     buildVars: txnsVars,
     extractPage: txnsExtractPage,
+    windowNarrowing: 'windowEnd',
+    // The walk re-asks the oldest day inclusively, so page N+1 re-serves rows
+    // page N already delivered — see `oldestDay` in HapoalimShapeTxns.ts.
+    pagesMayOverlap: true,
     urlTag: txnsUrl,
     method: 'POST',
     extraHeaders: txnsHeaders,
