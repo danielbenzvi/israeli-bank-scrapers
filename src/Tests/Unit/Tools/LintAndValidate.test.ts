@@ -194,19 +194,81 @@ describe('issuesFromCode — [Async] check', () => {
   });
 });
 
-describe('issuesFromCode — Rule #10 Playwright leak', () => {
-  it('flags playwright imports in a Phase file', () => {
-    const code = "import { Page } from 'playwright';\n";
-    const issues = issuesFromCode(SYNTHETIC_PHASE, code, new Map());
-    const r10 = issues.filter((i): boolean => i.rule === 'Rule #10');
-    expect(r10.length).toBe(1);
-  });
+// The specifier every Phase file actually uses is `playwright-core`, not
+// `playwright`. Until the `playwright-core` rows existed, the rule and its
+// tests agreed with each other about a specifier no source file imports, so
+// the gate reported green while guarding nothing.
+//
+// Type-only imports are erased at compile time and carry no runtime coupling;
+// a Phase naming `Page` in a signature is legitimate. Banning them would flag
+// five existing files for no safety gain — hence the `expected: 0` rows.
+//
+// `import type` is not the only erased form. `import { type Page }` is equally
+// erased and is the dominant style here (40+ files), so a statement-shape-only
+// check would flag the moment a Phase adopted the house style. The mixed row
+// pins the other side: one runtime binding among type bindings still leaks.
+const RULE_10_CASES = [
+  {
+    label: 'value import of playwright, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import { Page } from 'playwright';\n",
+    expected: 1,
+  },
+  {
+    label: 'value import of playwright-core, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import { chromium } from 'playwright-core';\n",
+    expected: 1,
+  },
+  {
+    label: 'side-effect import of playwright-core, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import 'playwright-core';\n",
+    expected: 1,
+  },
+  {
+    label: 'type-only import of playwright-core, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import type { Page } from 'playwright-core';\n",
+    expected: 0,
+  },
+  {
+    label: 'type-only import of playwright, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import type { Page } from 'playwright';\n",
+    expected: 0,
+  },
+  {
+    label: 'inline type-only import of playwright-core, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import { type Frame, type Page } from 'playwright-core';\n",
+    expected: 0,
+  },
+  {
+    label: 'mixed type and value import of playwright-core, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "import { type Page, chromium } from 'playwright-core';\n",
+    expected: 1,
+  },
+  {
+    label: 'value import of playwright, non-Phase',
+    file: SYNTHETIC_PIPELINE,
+    code: "import { Page } from 'playwright';\n",
+    expected: 0,
+  },
+  {
+    label: 'value import of playwright-core, non-Phase',
+    file: SYNTHETIC_PIPELINE,
+    code: "import { chromium } from 'playwright-core';\n",
+    expected: 0,
+  },
+];
 
-  it('does NOT flag playwright imports in non-Phase pipeline files', () => {
-    const code = "import { Page } from 'playwright';\n";
-    const issues = issuesFromCode(SYNTHETIC_PIPELINE, code, new Map());
+describe('issuesFromCode — Rule #10 Playwright leak', () => {
+  it.each(RULE_10_CASES)('$label → $expected issue(s)', ({ file, code, expected }) => {
+    const issues = issuesFromCode(file, code, new Map());
     const r10 = issues.filter((i): boolean => i.rule === 'Rule #10');
-    expect(r10.length).toBe(0);
+    expect(r10).toHaveLength(expected);
   });
 });
 
