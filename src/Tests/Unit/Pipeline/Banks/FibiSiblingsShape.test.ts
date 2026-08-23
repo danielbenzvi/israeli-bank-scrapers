@@ -127,11 +127,17 @@ describe.each(SIBLINGS)('$name FIBI-sibling shape', bank => {
     expect(accounts).toEqual([{ accountNumber: '555001', branch: '770', accountType: 105 }]);
   });
 
-  it('extractAccounts falls back to the whole list + accountType 0 when unmarked/absent', () => {
+  it('extractAccounts falls back to the whole list when no row is marked selected', () => {
+    const body = { accounts: [{ account: '555001', branch: '770' }] };
+    const args = accountsArgs(body, { accountType: [{ accountType: 105 }] });
+    const accounts = bank.mod.extractAccounts(args);
+    expect(accounts).toEqual([{ accountNumber: '555001', branch: '770', accountType: 105 }]);
+  });
+
+  it('extractAccounts rejects a row when the accountType lookup is absent', () => {
     const body = { accounts: [{ account: '555001', branch: '770' }] };
     const args = accountsArgs(body);
-    const accounts = bank.mod.extractAccounts(args);
-    expect(accounts).toEqual([{ accountNumber: '555001', branch: '770', accountType: 0 }]);
+    expect(() => bank.mod.extractAccounts(args)).toThrow(/no usable type code/);
   });
 
   it('extractAccounts returns empty when userData accounts are absent', () => {
@@ -140,13 +146,29 @@ describe.each(SIBLINGS)('$name FIBI-sibling shape', bank => {
     expect(accounts).toEqual([]);
   });
 
-  it('extractAccounts defaults missing account/branch fields to empty strings', () => {
+  it('extractAccounts rejects a userData row carrying no account number', () => {
     const args = accountsArgs(
       { accounts: [{ selected: true }] },
       { accountType: [{ accountType: 105 }] },
     );
+    expect(() => bank.mod.extractAccounts(args)).toThrow(/no wire-usable account number/);
+  });
+
+  it('extractAccounts rejects a userData row carrying no branch', () => {
+    const args = accountsArgs(
+      { accounts: [{ account: '555001', selected: true }] },
+      { accountType: [{ accountType: 105 }] },
+    );
+    expect(() => bank.mod.extractAccounts(args)).toThrow(/missing its branch code/);
+  });
+
+  it('extractAccounts keeps a leading-zero branch as a string', () => {
+    const args = accountsArgs(
+      { accounts: [{ account: '555001', branch: '099', selected: true }] },
+      { accountType: [{ accountType: 105 }] },
+    );
     const accounts = bank.mod.extractAccounts(args);
-    expect(accounts).toEqual([{ accountNumber: '', branch: '', accountType: 105 }]);
+    expect(accounts).toEqual([{ accountNumber: '555001', branch: '099', accountType: 105 }]);
   });
 
   it('balanceExtract prefers currentBalance, then withdrawable, then 0', () => {

@@ -120,6 +120,30 @@ function runGateIn(body: string, root: string): number {
 }
 
 /**
+ * Run the gate in a throwaway repository carrying a chosen manifest.
+ *
+ * The manifest is written verbatim rather than serialised, so a caller can
+ * supply text that parses to something which is not a manifest at all.
+ * @param body - Markdown source to check.
+ * @param manifest - Raw `package.json` contents.
+ * @returns Exit status and stdout the gate reported.
+ */
+function gateWithManifest(body: string, manifest: string): { status: number; stdout: string } {
+  const tmp = os.tmpdir();
+  const prefix = path.join(tmp, 'doc-paths-repo-');
+  const root = fs.mkdtempSync(prefix);
+  const manifestPath = path.join(root, 'package.json');
+  fs.writeFileSync(manifestPath, manifest, 'utf8');
+  const written = writeBody(body);
+  try {
+    return spawnGate(written.file, root);
+  } finally {
+    fs.rmSync(written.dir, { recursive: true, force: true });
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+}
+
+/**
  * Run the gate against a fixture that declares entry points but has no build.
  *
  * This is what makes the exemption cases non-vacuous: none of the fixture's
@@ -129,17 +153,9 @@ function runGateIn(body: string, root: string): number {
  * @returns Exit code the gate reported.
  */
 function runGateWithoutBuild(body: string): number {
-  const tmp = os.tmpdir();
-  const prefix = path.join(tmp, 'doc-paths-repo-');
-  const root = fs.mkdtempSync(prefix);
-  try {
-    const manifest = JSON.stringify(FIXTURE_MANIFEST);
-    const manifestPath = path.join(root, 'package.json');
-    fs.writeFileSync(manifestPath, manifest, 'utf8');
-    return runGateIn(body, root);
-  } finally {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
+  const manifest = JSON.stringify(FIXTURE_MANIFEST);
+  const result = gateWithManifest(body, manifest);
+  return result.status;
 }
 
 /**
@@ -228,6 +244,40 @@ describe('check-doc-paths — published entry points are exempt', () => {
   it('still accepts a source path that does resolve', () => {
     const code = runGate('See `scripts/check-doc-paths.mjs` for detail.\n');
     expect(code).toBe(0);
+  });
+});
+
+/**
+ * Manifests that parse cleanly but cannot be read as a manifest.
+ *
+ * `JSON.parse` returns each of these without throwing, so the `try/catch`
+ * around it never fires; only the shape guard after it stands between the gate
+ * and a manifest it cannot use. The three are not equivalent. `null` is the one
+ * that would raise a `TypeError` on dereferencing `exports`, aborting before a
+ * single citation was checked. An array and a bare string dereference to
+ * `undefined` instead, so they pin the fail-closed BEHAVIOUR rather than a
+ * crash: the gate must report the citation unresolved, never treat an unusable
+ * manifest as one that simply exports nothing.
+ */
+const UNUSABLE_MANIFESTS = [
+  { label: 'a manifest that is literally `null`', manifest: 'null' },
+  { label: 'a manifest that is an array', manifest: '[]' },
+  { label: 'a manifest that is a bare string', manifest: '"nope"' },
+] as const;
+
+describe('check-doc-paths — an unusable manifest exempts nothing', () => {
+  // Asserting on stdout, not just the exit code: an unhandled throw also exits
+  // 1, so only reaching the report proves the guard held rather than crashed.
+  it.each(UNUSABLE_MANIFESTS)('reports an undeclared build path given $label', ({ manifest }) => {
+    const body = 'Bundle `fixture-build/main.cjs` is unchanged.\n';
+    const result = gateWithManifest(body, manifest);
+    expect(result.stdout).toContain('✗ fixture-build/main.cjs');
+  });
+
+  it.each(UNUSABLE_MANIFESTS)('fails closed given $label', ({ manifest }) => {
+    const body = 'Bundle `fixture-build/main.cjs` is unchanged.\n';
+    const result = gateWithManifest(body, manifest);
+    expect(result.status).toBe(1);
   });
 });
 

@@ -92,7 +92,31 @@ Both snapshots are gitignored, so this leaves the committed baseline untouched.
 | `instability`       | `fanOut / (fanIn + fanOut)`. `0` = stable contract, `1` = volatile leaf.      |
 | `cohesion`          | Per cluster: `internal / (internal + outgoing)`. Low means the cluster leaks. |
 | `importCycles`      | Strongly-connected components (Tarjan). Must stay `0`.                        |
-| guardrails          | Canary count, ESLint rule count, `any` usages, `lib/index.cjs` hash.          |
+| guardrails          | Canary count, distinct ESLint rule count, `any` usages, `lib/index.cjs` hash. |
+
+The ESLint figure counts **distinct rule names**, not declaration lines, so
+re-scoping a rule cannot register as deleting one. It answers "did a rule leave
+the config?" only. Whether each cluster's caps are still strict enough is
+asserted directly by `lint:guideline-coverage`, which resolves the effective
+config per cluster and fails by name when a cap goes missing or laxer — that is
+what catches a deleted _scoped_ declaration, which this count cannot see.
+
+That gate is **complete for the four numeric caps**: it resolves the effective
+config for every production _file_ under `src/Common` and `src/Scrapers` — 862
+of them — and fails unless each cap matches the expectation recorded across
+`src/Tests/Tools/CapRegimeTable.ts` (the policy anchor) and
+`src/Tests/Tools/CapOverrides.ts` (the per-path exceptions) exactly. The unit is
+the file rather than the directory because this config also
+scopes caps to individual filenames beside a differently-capped sibling
+directory (`Strategy/Scrape/ScrapeExecutor.ts` next to `Strategy/Scrape/**`, for
+one); sampling a single file per directory would leave those regimes unmeasured.
+Exact matching is what catches a deleted block that pins a drained sub-tree back
+to the canonical cap — for example `Strategy/Scrape/Executor/**`, which `§19.1`
+would otherwise leave grandfathered at 40 LoC per function. It also catches the
+reverse: draining a tree without recording it, which `eslint-rules-guidlines.md`
+§1 requires in the same PR. Rules outside those four — notably scoped
+`no-restricted-syntax` and `max-statements` — stay outside the reach of both
+measures; removing one of those still needs review to catch.
 
 The `lib/index.cjs` hash detects whether the **built bundle** changed. It is an
 implementation-bundle hash, not a declaration-level API diff: a purely internal

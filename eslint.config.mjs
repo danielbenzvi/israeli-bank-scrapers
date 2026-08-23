@@ -1524,7 +1524,10 @@ export default tseslint.config(
       'sonarjs/use-type-alias': 'error', // S4323
       'sonarjs/no-skipped-tests': 'error', // S1607
       // Unicorn — modern-JS rules SonarCloud wraps
-      'unicorn/prefer-export-from': ['error', { checkUsedVariables: false }], // S7763
+      // NOTE: `unicorn/prefer-export-from` (S7763) is NOT declared here.
+      // It is enforced repo-wide and strict by §12e below, which is a
+      // superset of this block's scope. Declaring it twice would let the
+      // two copies drift apart — the exact failure that caused PR #500.
       'unicorn/prefer-string-replace-all': 'error', // S7781
       'unicorn/prefer-string-raw': 'error', // S7780
       'unicorn/prefer-at': 'error', // S7755
@@ -1600,43 +1603,48 @@ export default tseslint.config(
     },
   },
 
-  // 12e. RE-EXPORT SHORTHAND (Security Hardening 2026-05) — scoped
-  //      flip of `unicorn/prefer-export-from` `checkUsedVariables`
-  //      under `src/Scrapers/Base/**` AND `src/Scrapers/Pipeline/Types/**`.
-  //      Decide §4 RC-8 OPTION-B: keeps the global default at `false`
-  //      (loose — equivalent to legacy `ignoreUsedVariables: true`)
-  //      to avoid surfacing the 10 collateral hits as in-scope; flips
-  //      locally so the rule fires on `BaseScraperWithBrowser.ts` after
-  //      the manual rewrite.
+  // 12e. RE-EXPORT SHORTHAND (`unicorn/prefer-export-from`, Sonar
+  //      `typescript:S7763`) — REPO-WIDE AND STRICT.
   //
-  //      PR #274 extension — Pipeline/Types covered to match Sonar
-  //      `typescript:S7763`. The PR #274 review surfaced 11 instances of
-  //      `import type { X } from './Domain/...js'; export type { ..., X }`
-  //      in `PipelineContext.ts`; with `checkUsedVariables: false` the
-  //      global rule treats the barrel-export reference as "used" and
-  //      skips. Flipping the flag for `Pipeline/Types/**` makes ESLint
-  //      catch the same anti-pattern locally on the next commit so the
-  //      Sonar failure cannot recur. Production code base is unchanged
-  //      by this extension (the 11 PR #274 sites are converted to direct
-  //      `export type ... from` in the same commit).
+  //      This is the SINGLE declaration of the rule. §11 deliberately
+  //      omits it and points here.
+  //
+  //      History — why the scope is now global:
+  //      • 2026-05 (Security Hardening) introduced this block scoped to
+  //        `src/Scrapers/Base/**` only, keeping the global default loose
+  //        so the collateral hits elsewhere stayed out of that PR.
+  //      • PR #274 extended the scope to `src/Scrapers/Pipeline/Types/**`
+  //        after 11 more instances surfaced there, and recorded that the
+  //        Sonar failure "cannot recur".
+  //      • It recurred. PR #500 hit 32 S7763 issues under
+  //        `src/Scrapers/Pipeline/Banks/**` — a folder no one had
+  //        enumerated. Enumerating folders one incident at a time only
+  //        ever covers the folders that already failed.
+  //
+  //      The whole `src` tree was converted to `export ... from` in the
+  //      commits preceding this one, so the strict rule starts from a
+  //      verified zero-violation baseline and no grandfather override is
+  //      needed. `files: ['src/**/*.ts']` intentionally also covers the
+  //      Sonar-excluded paths (`src/Tests/**`, `src/Common/**`, legacy
+  //      scrapers, `src/Scrapers/Registry/**`): keeping them clean costs
+  //      nothing now and removes the next enumeration gap.
+  //
+  //      Canary: `re-export-shorthand.canary.ts`. `EslintCanaries/**` is
+  //      globally ignored (§1), but `verify.sh` lints with `--no-ignore`,
+  //      so `files:` matching still governs — `src/**/*.ts` covers it and
+  //      the previous single-file entry is no longer required. The canary
+  //      exports a locally-used imported binding, so it only fires while
+  //      `checkUsedVariables` is `true`; if that flag is ever loosened the
+  //      canary goes silent and `verify.sh` fails it as dead.
   //
   //      2026-06-08 compat: eslint-plugin-unicorn v65 renamed the legacy
   //      `ignoreUsedVariables: boolean` option to `checkUsedVariables`
   //      with inverted semantics. Mapping: `ignoreUsedVariables: true`
   //      ↔ `checkUsedVariables: false` (loose); `ignoreUsedVariables:
-  //      false` ↔ `checkUsedVariables: true` (strict).
+  //      false` ↔ `checkUsedVariables: true` (strict). v65 rejects the
+  //      legacy key outright ("should NOT have additional properties").
   {
-    files: [
-      'src/Scrapers/Base/**/*.ts',
-      'src/Scrapers/Pipeline/Types/**/*.ts',
-      // Phase 8.5c / Commit T1 — extend scope to the re-export-shorthand
-      // canary so it can trip its target rule. Without this single-file
-      // entry the canary lives outside §12e's scope and silently passes
-      // (errorCount=0 with --no-ignore). T1's rewritten verify.sh now
-      // rejects any canary that produces zero real rule-IDs, so the
-      // canary must be made functional alongside the harness fix.
-      'src/Scrapers/Pipeline/EslintCanaries/re-export-shorthand.canary.ts',
-    ],
+    files: ['src/**/*.ts'],
     plugins: { unicorn },
     rules: {
       'unicorn/prefer-export-from': ['error', { checkUsedVariables: true }],
@@ -1832,42 +1840,45 @@ export default tseslint.config(
   // the Scrape sub-folder, future commits could quietly re-blob one
   // of the new homes back toward four-digit line counts.
   //
-  // Per-function cap stays at **20** effective lines for the broad
-  // Mediator/Scrape/** surface — this matches the original Phase 5
-  // baseline and avoids forcing pre-existing files unrelated to
-  // Phase 8.5b's canonical-10 drain (AccountExtractor, BfsFieldSearch,
+  // Per-function cap: the Phase 5 baseline for this glob **was** 20
+  // effective lines, chosen so pre-existing files unrelated to Phase
+  // 8.5b's canonical-10 drain (AccountExtractor, BfsFieldSearch,
   // Coercion, ContainerPicker, EndpointResolver, ForensicAuditAction,
   // JsonTraversal, MirrorDetection, ScrapeUiTrigger, TxnMapper,
-  // TxnShape, LifoCrawl, TxnHunt) into a phase-mismatched refactor.
-  // §12B below raises the bar to **10** for the drained canonical-10
-  // sub-folders (ScrapePhase/**, ScrapeReplay/**, FrozenScrapeAction,
-  // UrlDateRange). Pre-existing files retain cap 20 here until their
-  // own dedicated drain phase.
+  // TxnShape, LifoCrawl, TxnHunt) were not forced into a
+  // phase-mismatched refactor. That 20 is now dead: §12B below raises
+  // the bar to 10 for the drained canonical-10 sub-folders
+  // (ScrapePhase/**, ScrapeReplay/**, FrozenScrapeAction,
+  // UrlDateRange), §14b.4 re-scopes ALL of `Mediator/Scrape/**` to 10
+  // for the Phase 2e drain, and the §19.0 strict baseline — later
+  // still, and therefore the block that actually wins — resolves every
+  // one of the 65 production files under this glob to 10. Flat config
+  // is last-wins, so no production file here resolves to 20 any more.
+  // The `max-lines-per-function` rule is therefore NOT declared in this
+  // block: a dead 20 would read as the effective cap and mislead the
+  // next maintainer, which is precisely the failure the cap-regime gate
+  // in `src/Tests/Tools/` exists to surface.
   //
   // File-size cap stays at **150 effective lines** so every Scrape
-  // sub-module still fits in a single reviewer's working memory.
+  // sub-module still fits in a single reviewer's working memory. The
+  // shim (`ScrapeAutoMapper.ts`) sits under this same glob and so is
+  // bound by that 150 too — Section 7 turns `max-lines` off across
+  // `Mediator/**`, and this block is what puts it back for Scrape.
   //
-  // The shim itself (`ScrapeAutoMapper.ts`) is intentionally left
-  // unconstrained — Section 7 already allows it, and this guard is
-  // about preventing regression of the new homes, not the facade.
-  //
-  // Two canary files enforce both halves of the cap: the
+  // One canary enforces the file half of the cap: the
   // `no-scrape-mapper-blob.canary.ts` over-sizes the file to prove
-  // `max-lines` fires, and the
-  // `scrape-cluster-fn-over-cap.canary.ts` over-sizes a single
-  // function to prove `max-lines-per-function` fires.
+  // `max-lines` fires. The function half is proved by
+  // `scrape-cluster-fn-over-cap.canary.ts`, which is un-ignored in
+  // §19.0 so it resolves through the same block production does. It
+  // deliberately does NOT live here: this block declares no
+  // per-function cap, so there is nothing here for it to certify.
   {
     files: [
       'src/Scrapers/Pipeline/Mediator/Scrape/**/*.ts',
       'src/Scrapers/Pipeline/EslintCanaries/no-scrape-mapper-blob.canary.ts',
-      'src/Scrapers/Pipeline/EslintCanaries/scrape-cluster-fn-over-cap.canary.ts',
     ],
     rules: {
       'max-lines': ['error', { max: 150, skipBlankLines: true, skipComments: true }],
-      'max-lines-per-function': [
-        'error',
-        { max: 20, skipBlankLines: true, skipComments: true, IIFEs: true },
-      ],
     },
   },
 
@@ -2545,6 +2556,15 @@ export default tseslint.config(
     ignores: [
       'src/scrapers/**',
       'src/Scrapers/Pipeline/EslintCanaries/**',
+      // …except the one canary that exists to certify THIS block. The
+      // directory-wide ignore above means no canary can normally resolve
+      // through §19.0, so the strict 10/10 baseline — the last-wins
+      // declaration for the 65 `Mediator/Scrape` production files, and
+      // the default that the §19.1-§19.3 grandfathers override elsewhere
+      // — would have no canary coverage at all. Un-ignoring this single
+      // file lets it resolve exactly as those 65 do, so relaxing §19.0
+      // silences it.
+      '!src/Scrapers/Pipeline/EslintCanaries/scrape-cluster-fn-over-cap.canary.ts',
       'src/Scrapers/Registry/**',
     ],
     rules: {
@@ -2647,6 +2667,29 @@ export default tseslint.config(
     },
   },
 
+  // 19.2a RE-TIGHTEN — Pipeline/Types/Domain back to the canonical 10.
+  //   §19.2 above is BROADER than the earlier `Types/Domain/**` block
+  //   (which sets `max-lines-per-function: 10`) and lands LATER, so
+  //   flat-config last-wins silently raised Domain from 10 to 30. The
+  //   earlier block's own comment states the intent — "any future
+  //   runtime code in this folder must fit within 10 LoC" — and its
+  //   canary lives outside `Types/**`, so it kept firing at 10 while
+  //   production Domain files resolved to 30, hiding the regression.
+  //   All 20 Domain files already satisfy 10, so this restores the
+  //   declared intent without draining anything.
+  {
+    files: [
+      'src/Scrapers/Pipeline/Types/Domain/**/*.ts',
+      'src/Scrapers/Pipeline/EslintCanaries/types-domain-fn-over-10.canary.ts',
+    ],
+    rules: {
+      'max-lines-per-function': [
+        'error',
+        { max: 10, skipBlankLines: true, skipComments: true, IIFEs: true },
+      ],
+    },
+  },
+
   // 19.3 GRANDFATHER — Pipeline/Core + Phases + Interceptors + Banks + Registry.
   {
     files: [
@@ -2669,10 +2712,14 @@ export default tseslint.config(
   //   leaving `Types/BasePhase.ts` as a thin re-export shim for the v8.5
   //   release window.
   //
-  //   SCOPE NARROWED + DRAINED (CR PR #338 iteration 2): all six stage
+  //   SCOPE NARROWED + DRAINED (CR PR #338 iteration 2): the eight stage
   //   orchestrators (`runStages`, `runStagesAfterPre`, `handleStage`,
   //   `takePhaseScreenshot`, `runPre`, `runAction`, `runPost`, `runFinal`)
-  //   have been refactored to ≤10 LoC each by extracting six new helpers:
+  //   were reduced to fit the §19.3 cap of 15 by extracting six helpers.
+  //   They are NOT all ≤10: `runStagesAfterPre` (15), `runPost` (13),
+  //   `runFinal` (13), `handleStage` (12) and `takePhaseScreenshot` (11)
+  //   still exceed the canonical 10 and await the Base cap-10 rollout.
+  //   The six extracted helpers are:
   //     • `wrapStageThrow<T>`     — try/catch envelope (CR F3 — promotes
   //       thrown stage exceptions into structured Procedure failures so
   //       the runtime contract is uniform across happy + sad paths)
@@ -2683,7 +2730,7 @@ export default tseslint.config(
   //     • `mergeActionResult`     — ACTION's IActionContext → IPipelineContext merge
   //   The per-function (`max-lines-per-function`) + per-method
   //   (`max-statements`) overrides have been DELETED entirely — global
-  //   §19.3 (10/10) now applies. Only `max-lines: 'off'` remains because
+  //   §19.3 (15/10) now applies. Only `max-lines: 'off'` remains because
   //   the abstract Template Method file legitimately exceeds the 300-LoC
   //   global cap (~520 LoC after all six extractions + their typedoc) —
   //   same precedent §7 grants to `Pipeline/{Mediator,Strategy,Types}/**`.
@@ -2694,7 +2741,10 @@ export default tseslint.config(
     rules: {
       // ~520 LoC Template Method abstract class. Same `max-lines: off`
       // precedent §7 grants to `Pipeline/{Mediator,Strategy,Types}/**`.
-      // Per-function caps (10/10) inherited from §19.3 — no override.
+      // Per-function caps inherited from §19.3 — no override. Those are
+      // `max-lines-per-function: 15` and `max-statements: 10`, NOT 10/10:
+      // six methods here still measure 11–15 effective lines, so this file
+      // awaits the Base cap-10 rollout CLEAN_CODE.md tracks as follow-up.
       'max-lines': 'off',
     },
   },
@@ -2960,9 +3010,17 @@ export default tseslint.config(
   //     (`max(options.startDate, 1y ago)`), which must stay pinned to wall-clock
   //     now — measuring it from a narrowed end would let the walk ask for data
   //     older than the provider serves.
+  //
+  //     Widened 2026-08 (Phase 4) from `Banks/**/scrape/` to also cover
+  //     `Phases/ApiDirectScrape/**`: a bank family that shares one neutral
+  //     `*ShapeTxns.ts` factory moves the wire's window bound out of the bank
+  //     folder, and a path-keyed rule would have dropped the guardrail exactly
+  //     where several banks now depend on it at once. The glob is widened, never
+  //     narrowed — coverage only grows (eslint-rules-guidlines.md §1/§4).
   {
     files: [
       'src/Scrapers/Pipeline/Banks/**/scrape/*ShapeTxns.ts',
+      'src/Scrapers/Pipeline/Phases/ApiDirectScrape/**/*ShapeTxns.ts',
       'src/Scrapers/Pipeline/EslintCanaries/shape-txns-window-end-from-clock.canary.ts',
     ],
     ignores: ['src/Scrapers/Pipeline/Banks/OneZero/scrape/OneZeroShapeTxns.ts'],
