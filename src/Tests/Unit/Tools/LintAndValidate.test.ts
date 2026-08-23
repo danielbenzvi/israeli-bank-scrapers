@@ -12,8 +12,11 @@ import {
   analyzeFile,
   expandToFiles,
   isExcluded,
+  isRuleKey,
   issuesFromCode,
   loadAllowlist,
+  parseOnlyArgs,
+  RULE_KEYS,
   type RuleKey,
 } from '../../../Tests/Tools/LintValidator.js';
 
@@ -269,6 +272,145 @@ describe('issuesFromCode — Rule #10 Playwright leak', () => {
     const issues = issuesFromCode(file, code, new Map());
     const r10 = issues.filter((i): boolean => i.rule === 'Rule #10');
     expect(r10).toHaveLength(expected);
+  });
+});
+
+// Rule #16 guards a tree that is already clean: zero selector-based
+// interaction calls exist inside src/Scrapers/Pipeline today. A guard over a
+// clean tree is exactly the kind of rule that can silently guard nothing, so
+// the table pins both directions.
+//
+// The three `expected: 0` structural rows are the ones that make the rule
+// satisfiable at all. The helpers are DEFINED inside the Pipeline tree
+// (ElementWaitAction.ts, ElementsInteractions.ts) and are re-exported to
+// legacy callers through src/Common/ElementsInteractions.ts, so a naive
+// "name appears in a Pipeline file" check would flag the definitions and the
+// export list and could never reach zero.
+//
+// Only the declaration row is load-bearing today: mutation testing showed the
+// import and export rows pass because the pattern demands an opening paren,
+// not because of any import handling. They are kept as a tripwire — broaden
+// the pattern beyond call shape and these two rows fail immediately.
+//
+// The legacy row encodes the maintainer's pipeline-only ruling: Mizrahi and
+// friends keep calling these helpers with literal CSS and must not fail the
+// build. Ignoring legacy is not the same as breaking it.
+const RULE_16_CASES = [
+  {
+    label: 'clickButton call, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "await clickButton(ctx, '#submit');\n",
+    expected: 1,
+  },
+  {
+    label: 'clickLink call, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "await clickLink(page, 'a.next');\n",
+    expected: 1,
+  },
+  {
+    label: 'waitUntilElementFound call, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "await waitUntilElementFound(page, '#tzId');\n",
+    expected: 1,
+  },
+  {
+    label: 'waitUntilElementDisappear call, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "await waitUntilElementDisappear(page, 'div.overlay');\n",
+    expected: 1,
+  },
+  {
+    label: 'clickButton call, Phase',
+    file: SYNTHETIC_PHASE,
+    code: "await clickButton(ctx, '#submit');\n",
+    expected: 1,
+  },
+  {
+    label: 'helper declaration, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: 'async function clickButton(ctx: Page, sel: string): Promise<boolean> {\n',
+    expected: 0,
+  },
+  {
+    label: 'helper import, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "import { clickButton } from './ElementsInteractions.js';\n",
+    expected: 0,
+  },
+  {
+    label: 'helper re-export, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "export { clickButton, waitUntilElementFound } from './Elements.js';\n",
+    expected: 0,
+  },
+  {
+    label: 'text-based location, Pipeline',
+    file: SYNTHETIC_PIPELINE,
+    code: "await page.getByRole('button', { name: 'המשך' }).click();\n",
+    expected: 0,
+  },
+  {
+    label: 'clickButton call, legacy (out of scope)',
+    file: SYNTHETIC_OTHER,
+    code: "await clickButton(ctx, '#submit');\n",
+    expected: 0,
+  },
+];
+
+describe('issuesFromCode — Rule #16 zero-CSS interaction guard', () => {
+  it.each(RULE_16_CASES)('$label → $expected issue(s)', ({ file, code, expected }) => {
+    const issues = issuesFromCode(file, code, new Map());
+    const r16 = issues.filter((i): boolean => i.rule === 'Rule #16');
+    expect(r16).toHaveLength(expected);
+  });
+});
+
+describe('parseOnlyArgs — --only flag validation', () => {
+  it('returns every argument as a path when the flag is absent', () => {
+    const parsed = parseOnlyArgs(['src', 'docs']);
+    expect(parsed).toEqual({ rule: '', paths: ['src', 'docs'], error: '' });
+  });
+
+  it('extracts a valid rule and leaves the paths behind', () => {
+    const parsed = parseOnlyArgs(['--only', 'Rule #17', 'src']);
+    expect(parsed).toEqual({ rule: 'Rule #17', paths: ['src'], error: '' });
+  });
+
+  it('rejects an unknown rule instead of filtering every issue away', () => {
+    const parsed = parseOnlyArgs(['--only', 'Rule #99', 'src']);
+    expect(parsed.error).toContain('unknown rule');
+    expect(parsed.rule).toBe('');
+  });
+
+  it('rejects the flag when no value follows it', () => {
+    const parsed = parseOnlyArgs(['src', '--only']);
+    expect(parsed.error).toContain('needs a rule key');
+    expect(parsed.rule).toBe('');
+  });
+
+  // Removal has to be positional: filtering argv by VALUE would delete this
+  // path, because it is spelled exactly like the rule key that precedes it.
+  it('keeps a path spelled like the rule key', () => {
+    const parsed = parseOnlyArgs(['--only', 'Rule #17', 'Rule #17']);
+    expect(parsed).toEqual({ rule: 'Rule #17', paths: ['Rule #17'], error: '' });
+  });
+
+  it('removes only the flag pair, keeping paths on both sides', () => {
+    const parsed = parseOnlyArgs(['before', '--only', 'Rule #15', 'after']);
+    expect(parsed.paths).toEqual(['before', 'after']);
+  });
+});
+
+describe('isRuleKey', () => {
+  it.each(RULE_KEYS)('accepts the emitted key %s', key => {
+    const isKnown = isRuleKey(key);
+    expect(isKnown).toBe(true);
+  });
+
+  it.each(['Rule 17', 'rule #17', 'Rule #99', ''])('rejects %p', candidate => {
+    const isKnown = isRuleKey(candidate);
+    expect(isKnown).toBe(false);
   });
 });
 
