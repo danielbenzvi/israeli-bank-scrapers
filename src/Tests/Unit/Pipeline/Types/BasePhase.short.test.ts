@@ -1,5 +1,5 @@
 /**
- * Unit tests for Types/BasePhase — MOCK_MODE short-circuits + empty-discovery early returns.
+ * Unit tests for Phases/Base/BasePhase — MOCK_MODE short-circuits + empty-discovery early returns.
  *
  * Split off from BasePhase.test.ts to honor max-lines (300).
  */
@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import type { Page } from 'playwright-core';
 
 import { ScraperErrorTypes } from '../../../../Scrapers/Base/ErrorTypes.js';
-import { BasePhase } from '../../../../Scrapers/Pipeline/Types/BasePhase.js';
+import { BasePhase } from '../../../../Scrapers/Pipeline/Phases/Base/BasePhase.js';
 import { none } from '../../../../Scrapers/Pipeline/Types/Option.js';
 import type { PhaseName } from '../../../../Scrapers/Pipeline/Types/Phase.js';
 import type {

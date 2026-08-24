@@ -5,7 +5,7 @@
  *
  * <p>Replaces the scattered direct calls to `waitForLoadState` /
  * `waitForDomReady` with a declarative spec that callers (typically
- * {@link "../../Types/BasePhase.js"} `BasePhase.runStage`) thread
+ * {@link "../../Phases/Base/BasePhase.js"} `BasePhase.runStage`) thread
  * through. Each call emits a canonical telemetry line so post-run
  * `pipeline.log` analysis can attribute slow runs to the exact stage
  * paying the prelude budget.
@@ -38,7 +38,7 @@ import { getActivePhase, getActiveStage } from '../../Types/ActiveState.js';
 import type { ScraperLogger } from '../../Types/Debug.js';
 import { isMockTimingActive } from '../../Types/Debug.js';
 import type { Option } from '../../Types/Option.js';
-import { PRELUDE_NONE_BUDGET_MS } from '../Timing/TimingConfig.js';
+import { PRELUDE_NONE_BUDGET_MS } from '../Timing/SharedTimingConstants.js';
 import { waitForDomReady, waitForSpaReady } from './PageReadiness.js';
 
 /** Closed enum of readiness levels — matches the OCP pattern used by AuthDiscoveryFailCode. */
@@ -52,7 +52,7 @@ interface IPreludeSpec {
 
 /**
  * Sentinel for "no prelude required". Default returned by
- * {@link "../../Types/BasePhase.js"} `BasePhase.prelude` so phases
+ * {@link "../../Phases/Base/BasePhase.js"} `BasePhase.prelude` so phases
  * inherit the no-op without per-stage overrides. Budget value is
  * centralised in `TimingConfig.PRELUDE_NONE_BUDGET_MS`.
  */

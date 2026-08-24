@@ -1,8 +1,10 @@
 /**
- * SCRAPE-phase timing budgets. Split out of
- * {@link "./TimingConfig.js"} during Phase 12b — see file for the
- * rollout window during which the {@link "./TimingConfig.js"} barrel
- * still re-exports these names.
+ * SCRAPE-phase timing budgets.
+ *
+ * <p>Both values are best-effort ceilings on the organic dashboard
+ * click. The transaction traffic they wait for is normally already
+ * captured in LOGIN.POST, so expiry here degrades to the direct API
+ * path rather than failing the phase.
  */
 
 /** SCRAPE UI-trigger best-effort traffic wait. */

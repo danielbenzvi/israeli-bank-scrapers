@@ -1,6 +1,6 @@
 /**
  * Regression pins for the HOME wait-chain budgets owned by
- * `TimingConfig.ts`.
+ * `HomeTimingConfig.ts`.
  *
  * <p>Background — I-3 surfaced 2026-05-13 on PR #227 / release PR #172
  * CI run: Hapoalim's `E2E Real` job intermittently failed (~73-82% pass
@@ -43,7 +43,7 @@ import { fileURLToPath } from 'node:url';
 import {
   HOME_PRELUDE_TIMEOUT_MS,
   HOME_RESOLVER_ENTRY_TIMEOUT_MS,
-} from '../../../../../Scrapers/Pipeline/Mediator/Timing/TimingConfig.js';
+} from '../../../../../Scrapers/Pipeline/Mediator/Timing/HomeTimingConfig.js';
 
 /** Minimum SPA-prelude budget required to absorb Hapoalim CI `load` delay. */
 const MIN_HOME_PRELUDE_TIMEOUT_MS = 25_000;
@@ -78,15 +78,18 @@ function readHomeResolverSource(): string {
  * Structural detector for the `HOME_RESOLVER_ENTRY_TIMEOUT_MS`
  * import — tolerates multi-line import formatting, whitespace
  * variants, sibling named imports, and single- or double-quoted
- * specifiers. Anchored to the `Timing/TimingConfig.js` specifier
+ * specifiers. Anchored to the `Timing/HomeTimingConfig.js` specifier
  * so an unrelated re-export from another module cannot accidentally
  * satisfy the centralisation invariant.
  *
- * <p>`[\s\S]` (not `.`) keeps the brace-balanced segment portable
- * across the lint rule that bans the `s` (dotAll) flag.
+ * <p>`[^}]` (not `[\s\S]`) confines each half of the match to a
+ * single brace block. A lazy `[\s\S]*?` would happily run past one
+ * import's closing brace and pair the constant with a *later*
+ * import's specifier, so the guard would pass while the constant
+ * still came from the retired barrel.
  */
 const HOME_RESOLVER_ENTRY_TIMEOUT_IMPORT_REGEX =
-  /import\s*\{[\s\S]*?\bHOME_RESOLVER_ENTRY_TIMEOUT_MS\b[\s\S]*?\}\s*from\s*['"][^'"]*Timing\/TimingConfig\.js['"]/;
+  /import\s*\{[^}]*\bHOME_RESOLVER_ENTRY_TIMEOUT_MS\b[^}]*\}\s*from\s*['"][^'"]*Timing\/HomeTimingConfig\.js['"]/;
 
 describe('TimingHomePreludeBudget', () => {
   it('[HOME-PRELUDE-BUDGET-001] HomePreludeBudget_TimingConfig_ShouldStayAboveCiRaceFloor', () => {
@@ -96,7 +99,7 @@ describe('TimingHomePreludeBudget', () => {
     );
   });
 
-  it('[HOME-PRELUDE-BUDGET-002] HomeResolver_NoLocalEntryTimeout_ShouldImportFromTimingConfig', () => {
+  it('[HOME-PRELUDE-BUDGET-002] HomeResolver_NoLocalEntryTimeout_ShouldImportFromHomeTimingConfig', () => {
     const source = readHomeResolverSource();
     const hasTimingConfigImport = HOME_RESOLVER_ENTRY_TIMEOUT_IMPORT_REGEX.test(source);
     const hasLocalEntryTimeoutLiteral = /const\s+ENTRY_TIMEOUT\s*=/.test(source);

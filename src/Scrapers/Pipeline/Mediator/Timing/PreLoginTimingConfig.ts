@@ -1,8 +1,10 @@
 /**
- * PRE-LOGIN-phase timing budgets. Split out of
- * {@link "./TimingConfig.js"} during Phase 12b — see file for the
- * rollout window during which the {@link "./TimingConfig.js"} barrel
- * still re-exports these names.
+ * PRE-LOGIN-phase timing budgets.
+ *
+ * <p>Every value here is a ceiling, not a target: the PRE-LOGIN stage
+ * races a reveal control and a credential form that different banks
+ * render at very different speeds, so each probe gets its own budget
+ * rather than one shared timeout.
  */
 
 /** PRE-LOGIN reveal-button discovery probe ceiling. */

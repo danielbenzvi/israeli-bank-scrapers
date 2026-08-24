@@ -17,11 +17,11 @@ import {
   executeLoginSignal,
   executeValidateLogin,
 } from '../../Mediator/Login/LoginPhaseActions.js';
-import { LOGIN_PRELUDE_POST_TIMEOUT_MS } from '../../Mediator/Timing/TimingConfig.js';
-import { BasePhase } from '../../Types/BasePhase.js';
+import { LOGIN_PRELUDE_POST_TIMEOUT_MS } from '../../Mediator/Timing/LoginTimingConfig.js';
 import type { IActionContext, IPipelineContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, isOk } from '../../Types/Procedure.js';
+import { BasePhase } from '../Base/BasePhase.js';
 
 /** LOGIN prelude table — POST waits for SPA-ready; others no-op. */
 const LOGIN_PRELUDE_TABLE: Record<'PRE' | 'ACTION' | 'POST' | 'FINAL', IPreludeSpec> = {

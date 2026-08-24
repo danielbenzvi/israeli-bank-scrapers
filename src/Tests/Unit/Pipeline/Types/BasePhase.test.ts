@@ -1,12 +1,12 @@
 /**
- * Unit tests for Types/BasePhase — Template Method orchestration for phases.
+ * Unit tests for Phases/Base/BasePhase — Template Method orchestration for phases.
  */
 
 import { ScraperErrorTypes } from '../../../../Scrapers/Base/ErrorTypes.js';
 import {
   BasePhase,
   type IsPrePayloadValid,
-} from '../../../../Scrapers/Pipeline/Types/BasePhase.js';
+} from '../../../../Scrapers/Pipeline/Phases/Base/BasePhase.js';
 import { none, some } from '../../../../Scrapers/Pipeline/Types/Option.js';
 import type { PhaseName } from '../../../../Scrapers/Pipeline/Types/Phase.js';
 import type {
