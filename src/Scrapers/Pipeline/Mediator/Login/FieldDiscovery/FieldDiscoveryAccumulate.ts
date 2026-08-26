@@ -9,6 +9,7 @@ import { maskVisibleText } from '../../../Types/LogEvent.js';
 import { none, type Option, some } from '../../../Types/Option.js';
 import type { IResolvedTarget, LoginFieldKey } from '../../../Types/PipelineContext.js';
 import type { Procedure } from '../../../Types/Procedure.js';
+import { UNKNOWN_IDENTITY } from '../../Elements/ElementIdentity.js';
 import type { IFormAnchor } from '../../Form/FormAnchor.js';
 import type { IFieldContext } from '../../Selector/SelectorResolverPipeline.js';
 import type { IDiscoverFieldsArgs } from '../LoginFieldDiscovery.types.js';
@@ -24,13 +25,43 @@ import {
 type TargetMap = ReadonlyMap<LoginFieldKey, IResolvedTarget>;
 
 /**
+ * Read a target's identity token, treating an absent one as unknown.
+ * @param t - Resolved target.
+ * @returns Position token, or {@link UNKNOWN_IDENTITY} when it has none.
+ */
+function identityOf(t: IResolvedTarget): string {
+  return t.elementId ?? UNKNOWN_IDENTITY;
+}
+
+/**
  * Whether two resolutions point at the same element.
+ *
+ * <p>Selector strings answer this wrongly in one direction: one input can be
+ * described by two strings — an id and a placeholder match reaching the same
+ * node — so comparing strings admits a pair that did collide, the second fill
+ * silently overwriting the first. The position token both targets carry
+ * catches that pair.
+ *
+ * <p>Identity may only *add* collisions, never clear one. Two targets sharing
+ * a selector are filled through `locator(selector).first()`, so they address
+ * one element whatever their tokens say; DOM churn between the two reads can
+ * still produce differing tokens, and trusting those would re-admit the exact
+ * overwrite this guard exists to stop. A shared selector is therefore a
+ * collision outright, before identity is consulted.
+ *
+ * <p>`contextId` gates both paths: a position token only identifies an element
+ * within its own frame.
  * @param a - First resolution.
  * @param b - Second resolution.
- * @returns True when selector and context match.
+ * @returns True when both resolutions point at one element.
  */
 function sameTarget(a: IResolvedTarget, b: IResolvedTarget): boolean {
-  return a.selector === b.selector && a.contextId === b.contextId;
+  if (a.contextId !== b.contextId) return false;
+  if (a.selector === b.selector) return true;
+  const idA = identityOf(a);
+  const idB = identityOf(b);
+  const isComparable = idA !== UNKNOWN_IDENTITY && idB !== UNKNOWN_IDENTITY;
+  return isComparable && idA === idB;
 }
 
 /**

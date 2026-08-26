@@ -19,6 +19,16 @@ interface IResolvedTarget {
   readonly kind: string;
   /** Candidate value that was searched for. */
   readonly candidateValue: string;
+  /**
+   * Position of the element in its document tree — identity, not a selector.
+   *
+   * <p>Optional because not every target is read from a live page: one built
+   * from a config or a fixture carries no identity at all. A read that ran but
+   * could not resolve records the empty token instead, so both the absent and
+   * the empty case mean "identity unknown" and neither ever means "a distinct
+   * element".
+   */
+  readonly elementId?: string;
 }
 
 /** PreLogin.PRE discovery report — ACTION reads instead of re-discovering. */
