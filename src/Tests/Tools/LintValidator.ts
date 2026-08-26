@@ -20,6 +20,11 @@ import * as path from 'node:path';
 
 import * as ts from 'typescript';
 
+import {
+  SKIP_ALLOWLIST_FILES,
+  SONAR_PARITY_IGNORE_PREFIXES,
+} from '../../../eslint.canary-scope.mjs';
+
 /** Path fragment that marks a file as part of the Pipeline tree. */
 const PIPELINE_DIR = 'Scrapers/Pipeline';
 /** Path fragment that marks a file as a Phase. */
@@ -222,11 +227,15 @@ type AllowlistMap = Map<string, ReadonlySet<RuleKey>>;
 
 /**
  * Normalise a candidate path to forward-slash form.
+ *
+ * Converts backslashes on every host, not just Windows. `path.sep` alone is
+ * POSIX-blind: on Linux it is `/`, so a Windows-style path would pass through
+ * unchanged and silently fail every prefix test downstream.
  * @param p - Path using any OS separator.
  * @returns Path with forward slashes only.
  */
 function normalisePath(p: string): string {
-  return p.split(path.sep).join('/');
+  return p.split(path.sep).join('/').split('\\').join('/');
 }
 
 /**
@@ -571,8 +580,77 @@ const PII_PAYLOAD_RE = new RegExp(
 );
 
 /**
+ * Paths ESLint block 11 excludes from the SonarJS parity rules
+ * `redundant-type-aliases` (S6564) and `void-use` (S3735). That block
+ * mirrors `sonar-project.properties` `sonar.exclusions`, so SonarCloud
+ * does not report these paths either. Sharing the list with ESLint keeps
+ * each canary a faithful shadow of the rule it re-asserts, rather than a
+ * stricter policy that no configuration states.
+ */
+const SONAR_PARITY_IGNORES: readonly string[] = SONAR_PARITY_IGNORE_PREFIXES;
+
+/**
+ * The seven e2e-mocked suites ESLint block 19.7 permits to keep an
+ * unconditional `describe.skip` while their fixtures are captured. S1607
+ * stays active everywhere else — including the rest of `src/Tests` — because
+ * skipped tests are precisely what it exists to find.
+ */
+const SKIP_ALLOWLIST: readonly string[] = SKIP_ALLOWLIST_FILES;
+
+/** Repo root, forward-slash form, for relativising absolute inputs. */
+const CWD = process.cwd();
+const REPO_ROOT_FWD = normalisePath(CWD);
+
+/**
+ * Reduce a path to repo-relative form when it sits inside this checkout.
+ * A path from an unrelated checkout is returned unchanged, so it fails the
+ * prefix tests below and keeps every canary — the fail-closed direction.
+ * @param fwd - Forward-slash normalised file path.
+ * @returns Repo-relative path where possible, otherwise `fwd` unchanged.
+ */
+function toRepoRelative(fwd: string): string {
+  return fwd.startsWith(`${REPO_ROOT_FWD}/`) ? fwd.slice(REPO_ROOT_FWD.length + 1) : fwd;
+}
+
+/**
+ * Whether a path sits under any of the given repo-relative entries.
+ *
+ * An entry ending in `/` is a directory prefix; any other entry must match
+ * the whole path exactly, so a file entry cannot exempt a longer sibling
+ * name that merely starts with it. Anchoring at the start of the
+ * repo-relative path keeps an unrelated checkout whose ancestor happens to
+ * be named `src/Tests` from being silently exempted.
+ * @param fwd - Forward-slash normalised file path.
+ * @param entries - Repo-relative directory prefixes or exact file paths.
+ * @returns True on the first entry that matches.
+ */
+function matchesAny(fwd: string, entries: readonly string[]): boolean {
+  const normalised = normalisePath(fwd);
+  const rel = toRepoRelative(normalised);
+  return entries.some(e => (e.endsWith('/') ? rel.startsWith(e) : rel === e));
+}
+
+/**
+ * Run whichever SonarJS-mirror canaries are in scope for this file.
+ *
+ * Each canary mirrors the scope of the ESLint rule it shadows, so the gate
+ * can never enforce a policy stricter than the configuration it defends.
+ * @param fwd - Forward-slash normalised file path.
+ * @param code - Source text.
+ * @returns Issues from every canary that applies to this path.
+ */
+function sonarCanaryIssues(fwd: string, code: string): IIssue[] {
+  const issues: IIssue[] = [];
+  if (!matchesAny(fwd, SONAR_PARITY_IGNORES)) {
+    issues.push(...s6564CanaryIssues(code), ...s3735CanaryIssues(code));
+  }
+  if (!matchesAny(fwd, SKIP_ALLOWLIST)) issues.push(...s1607CanaryIssues(code));
+  return issues;
+}
+
+/**
  * Emit S6564-Canary issues for a file. Catches bare-primitive aliases
- * even when ESLint is bypassed.
+ * should the ESLint rule be reconfigured or dropped.
  * @param code - Source text.
  * @returns S6564-Canary issues (may be empty).
  */
@@ -593,7 +671,7 @@ function s6564CanaryIssues(code: string): IIssue[] {
 
 /**
  * Emit S3735-Canary issues for a file. Catches the `void <expr>;`
- * discard-promise antipattern.
+ * statement form; SonarJS exempts `void <promise>`, which stays legal.
  * @param code - Source text.
  * @returns S3735-Canary issues (may be empty).
  */
@@ -1024,9 +1102,10 @@ function issuesFromCodeRaw(filePath: string, code: string): IIssue[] {
   }
   if (isInPipeline) issues.push(...asyncIssues(code));
   issues.push(...piiLogIssues(code));
-  // Defence-in-depth canaries: re-affirm the SonarJS rules via regex
-  // so a `--no-verify` ESLint bypass still trips the architecture gate.
-  issues.push(...s6564CanaryIssues(code), ...s3735CanaryIssues(code), ...s1607CanaryIssues(code));
+  // Defence-in-depth canaries: re-assert three SonarJS rules by regex, each
+  // scoped exactly like the ESLint rule it shadows (config blocks 11, 19.6
+  // and 19.7), so the gate never enforces an undocumented stricter policy.
+  issues.push(...sonarCanaryIssues(fwd, code));
   return issues;
 }
 

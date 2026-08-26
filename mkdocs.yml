@@ -190,13 +190,16 @@ nav:
       - CI gates: workflow/ci.md
       - Main pipeline (post-merge CI): workflow/main-pipeline.md
       - Pre-commit hook: workflow/pre-commit.md
+      - Architecture linter scope: workflow/architecture-linter.md
       - Pre-push hook: workflow/pre-push.md
       - Branch flow & release-please: workflow/branch-flow.md
       - Releases & consumer signals: workflow/releases.md
       - Code-review tooling (CodeRabbit + SonarCloud): workflow/code-review-tooling.md
       - LSP (code intelligence): workflow/lsp.md
       - Doc path gate: workflow/doc-paths.md
+      - Docs coverage gate: workflow/docs-coverage.md
       - Public API surface gate: workflow/public-surface.md
+      - TypeScript compilers (TS 6 + TS 7): workflow/typescript-compilers.md
   - Contributing:
       - Overview: contributing/index.md
       - Adding a new bank: contributing/new-bank.md
