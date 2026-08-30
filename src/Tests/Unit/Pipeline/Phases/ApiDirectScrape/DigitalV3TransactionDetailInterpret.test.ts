@@ -11,16 +11,21 @@
  */
 
 import {
-  classifyDetailTransport,
   DIGITALV3_DETAIL_SCHEMA_VERSION,
   interpretDetailEnvelope,
 } from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailInterpret.js';
+import {
+  classifyDetailTransport,
+} from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailTransport.js';
 
 /**
- *
- * @param data
+ * A well-formed success envelope wrapping the given detail fields.
+ * @param data - The `data` object the provider would return.
+ * @returns The envelope as the endpoint sends it.
  */
-const envelope = (data: Record<string, unknown>) => ({ isSuccess: true, data });
+function successEnvelope(data: Record<string, unknown>): Record<string, unknown> {
+  return { isSuccess: true, data };
+}
 
 describe('interpretDetailEnvelope', () => {
   it('rejects a body that is not a success envelope', () => {
@@ -32,7 +37,8 @@ describe('interpretDetailEnvelope', () => {
   });
 
   it('extracts the issuer category for an ordinary merchant', () => {
-    const outcome = interpretDetailEnvelope(envelope({ businessName: 'MERCHANT', branchDescription: ' CATEGORY  NAME ' }));
+    const body = successEnvelope({ businessName: 'MERCHANT', branchDescription: ' CATEGORY  NAME ' });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.state).toBe('succeeded');
     expect(outcome.sourceCategory).toBe('CATEGORY NAME');
     expect(outcome.detailKind).toBe('issuer-category');
@@ -43,13 +49,15 @@ describe('interpretDetailEnvelope', () => {
     // The re-request trap: marking this a success with empty fields would leave
     // the caller unable to tell it apart from "not asked yet", so it would ask
     // again every run, forever.
-    const outcome = interpretDetailEnvelope(envelope({ businessName: 'MERCHANT' }));
+    const body = successEnvelope({ businessName: 'MERCHANT' });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.state).toBe('terminal-failure');
     expect(outcome.outcomeCode).toBe('empty-useful-detail');
   });
 
   it('extracts the counterparty name for a wallet transfer', () => {
-    const outcome = interpretDetailEnvelope(envelope({ businessName: 'BIT', transferBeneficiary: '  SOME  NAME ' }));
+    const body = successEnvelope({ businessName: 'BIT', transferBeneficiary: '  SOME  NAME ' });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.state).toBe('succeeded');
     expect(outcome.counterpartyDisplayName).toBe('SOME NAME');
   });
@@ -57,35 +65,35 @@ describe('interpretDetailEnvelope', () => {
   it('needs BOTH the wallet label and a counterparty field', () => {
     // The label alone appears on rows carrying no name; treating those as
     // transfers would claim a name that does not exist.
-    const outcome = interpretDetailEnvelope(envelope({ businessName: 'BIT', branchDescription: 'CATEGORY' }));
+    const body = successEnvelope({ businessName: 'BIT', branchDescription: 'CATEGORY' });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.counterpartyDisplayName).toBeUndefined();
     expect(outcome.detailKind).toBe('issuer-category');
   });
 
   it('refuses a counterparty name that is itself the wallet label', () => {
     // Carries no more information than the row already had.
-    const outcome = interpretDetailEnvelope(envelope({ businessName: 'BIT', transferBeneficiary: 'BIT' }));
+    const body = successEnvelope({ businessName: 'BIT', transferBeneficiary: 'BIT' });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.state).toBe('terminal-failure');
     expect(outcome.counterpartyDisplayName).toBeUndefined();
   });
 
   it('refuses an implausibly long counterparty name', () => {
-    const outcome = interpretDetailEnvelope(
-      envelope({ businessName: 'BIT', transferBeneficiary: 'x'.repeat(161) }),
-    );
+    const body = successEnvelope({ businessName: 'BIT', transferBeneficiary: 'x'.repeat(161) });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.state).toBe('terminal-failure');
   });
 
   it('keeps only whitelisted detail fields', () => {
-    const outcome = interpretDetailEnvelope(
-      envelope({ businessName: 'M', branchDescription: 'C', countryCode: 'IL', somethingElse: 'dropped' }),
-    );
+    const body = successEnvelope({ businessName: 'M', branchDescription: 'C', countryCode: 'IL', somethingElse: 'dropped' });
+    const outcome = interpretDetailEnvelope(body);
     expect(outcome.detailPayload).toEqual({ branchDescription: 'C', countryCode: 'IL' });
     expect(outcome.detailPayload).not.toHaveProperty('somethingElse');
   });
 
   it('stamps the schema version on every outcome', () => {
-    for (const body of [null, envelope({ businessName: 'M' }), envelope({ businessName: 'M', branchDescription: 'C' })]) {
+    for (const body of [null, successEnvelope({ businessName: 'M' }), successEnvelope({ businessName: 'M', branchDescription: 'C' })]) {
       expect(interpretDetailEnvelope(body).detailSchemaVersion).toBe(DIGITALV3_DETAIL_SCHEMA_VERSION);
     }
   });
@@ -95,13 +103,17 @@ describe('classifyDetailTransport', () => {
   const ok = { status: 200, contentType: 'application/json', redirected: false, sameOrigin: true };
 
   it('passes a clean JSON response through for interpretation', () => {
-    expect(classifyDetailTransport(ok)).toBeUndefined();
+    // `false` is the pipeline's miss sentinel — here it means "nothing to
+    // report at the transport level", which is what makes the body worth
+    // reading.
+    const verdict = classifyDetailTransport(ok);
+    expect(verdict).toBe(false);
   });
 
   it('stops the pass on throttling', () => {
     const verdict = classifyDetailTransport({ ...ok, status: 429 });
-    expect(verdict?.code).toBe('throttled');
-    expect(verdict?.stopPass).toBe(true);
+    expect(verdict).not.toBe(false);
+    expect(verdict).toMatchObject({ code: 'throttled', stopPass: true });
   });
 
   it('stops the pass on an expired session, however it presents', () => {
@@ -115,18 +127,17 @@ describe('classifyDetailTransport', () => {
       { ...ok, contentType: 'text/html' },
     ]) {
       const verdict = classifyDetailTransport(meta);
-      expect(verdict?.code).toBe('auth-expired');
-      expect(verdict?.stopPass).toBe(true);
+      expect(verdict).toMatchObject({ code: 'auth-expired', stopPass: true });
     }
   });
 
   it('treats a server error as retryable without stopping the pass', () => {
     const verdict = classifyDetailTransport({ ...ok, status: 503 });
-    expect(verdict?.state).toBe('retryable-failure');
-    expect(verdict?.stopPass).toBe(false);
+    expect(verdict).toMatchObject({ state: 'retryable-failure', stopPass: false });
   });
 
   it('treats a request that never landed as retryable', () => {
-    expect(classifyDetailTransport(undefined)?.state).toBe('retryable-failure');
+    const verdict = classifyDetailTransport(false);
+    expect(verdict).toMatchObject({ state: 'retryable-failure' });
   });
 });

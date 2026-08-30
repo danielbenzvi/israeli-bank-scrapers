@@ -17,12 +17,14 @@
 
 import { ScraperErrorTypes } from '../../../../Base/ErrorTypes.js';
 import type { IApiMediator } from '../../../Mediator/Api/ApiMediator.types.js';
+import { humanDelay } from '../../../Mediator/Timing/TimingActions.js';
 import { literalUrl } from '../../../Registry/WK/UrlsWK.js';
 import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../../Types/Procedure.js';
 import { fail } from '../../../Types/Procedure.js';
 import type { IEnrichRowsContext } from '../IApiDirectScrapeShape.js';
 import { enrichCardDetail } from './TransactionDetailEnrich.js';
+import type { ICardDetailDeps, ICardDetailOptions } from './TransactionDetailTypes.js';
 
 /** A card as both DigitalV3 banks describe it — the shapes are identical. */
 export interface IDigitalV3Card {
@@ -40,9 +42,13 @@ export interface IDigitalV3Card {
  * @param apiHost - The bank's API origin.
  * @returns The detail endpoint, branded as an inline literal URL.
  */
-function detailUrl(apiHost: string) {
-  return literalUrl(`${apiHost}/ocp/transactiondetails/DigitalV3.TransactionDetails/GetTransactionDetails`);
+function detailUrl(apiHost: string): ReturnType<typeof literalUrl> {
+  const route = 'ocp/transactiondetails/DigitalV3.TransactionDetails/GetTransactionDetails';
+  return literalUrl(`${apiHost}/${route}`);
 }
+
+/** Reported when the mediator cannot return the transport facts the loop reads. */
+const NEEDS_METADATA = 'detail enrichment needs a metadata-capable mediator';
 
 /** JSON content negotiation for the detail POST. */
 const DETAIL_HEADERS: Record<string, string> = {
@@ -59,25 +65,74 @@ const DETAIL_HEADERS: Record<string, string> = {
  * spending its budget against a session that is already gone.
  *
  * @param bus - This scrape's API mediator.
- * @param apiHost
+ * @param apiHost - The bank's API origin.
  * @returns A POST callable for the detail loop.
  */
 function bindDetailPost(
   bus: IApiMediator,
   apiHost: string,
 ): (body: Record<string, unknown>, timeoutMs: number) => Promise<Procedure<IPostWithMetadata>> {
+  const url = detailUrl(apiHost);
   return async (body, timeoutMs): Promise<Procedure<IPostWithMetadata>> => {
     const post = bus.apiPostWithMetadata;
-    if (post === undefined) {
-      return fail(ScraperErrorTypes.Generic, 'detail enrichment needs a metadata-capable mediator');
-    }
-    return post(detailUrl(apiHost), body, {
-      extraHeaders: DETAIL_HEADERS,
-      timeoutMs,
-      // The endpoint answers a bare replayed POST with a challenge even on a
-      // valid session; it wants the request to look like the site's own SPA.
-      firstPartyContract: true,
-    });
+    if (post === undefined) return fail(ScraperErrorTypes.Generic, NEEDS_METADATA);
+    // The endpoint answers a bare replayed POST with a challenge even on a
+    // valid session; it wants the request to look like the site's own SPA.
+    const opts = { extraHeaders: DETAIL_HEADERS, timeoutMs, firstPartyContract: true };
+    return post(url, body, opts);
+  };
+}
+
+/**
+ * Wall-clock source for the pass, injected so the loop is testable.
+ * @returns The current epoch milliseconds.
+ */
+function nowMs(): number {
+  return Date.now();
+}
+
+/**
+ * Pause between paced requests.
+ *
+ * Routed through {@link humanDelay} rather than a bare timer: it is the
+ * pipeline's own scheduler, and the timer-leak invariants are written against
+ * it. The range is a single point because the jitter has already been applied
+ * — `nextDetailRequest` picks the exact delay, so choosing again here would
+ * spread the pacing the budget just decided.
+ * @param ms - How long to wait.
+ * @returns A promise resolving once the delay has elapsed.
+ */
+async function pause(ms: number): Promise<void> {
+  await humanDelay(ms, ms);
+}
+
+/**
+ * Pacing jitter, so requests do not arrive on a fixed cadence.
+ * @returns A value in [0, 1) selecting a delay within the configured range.
+ */
+function pacingJitter(): number {
+  return Math.random();
+}
+
+/**
+ * Assemble the collaborators the detail pass needs from the driver's context.
+ * @param context - Account, action context and mediator from the driver.
+ * @param apiHost - The bank's API origin.
+ * @param options - The caller's enrichment configuration.
+ * @returns The dependency bundle for {@link enrichCardDetail}.
+ */
+function buildDetailDeps(
+  context: IEnrichRowsContext<IDigitalV3Card>,
+  apiHost: string,
+  options: ICardDetailOptions,
+): ICardDetailDeps {
+  return {
+    post: bindDetailPost(context.bus, apiHost),
+    options,
+    account: { cardSuffix: context.acct.cardSuffix, companyCode: context.acct.companyCode },
+    now: nowMs,
+    sleep: pause,
+    jitter: pacingJitter,
   };
 }
 
@@ -86,38 +141,19 @@ function bindDetailPost(
  *
  * Returns the rows untouched when the caller configured no enrichment, so the
  * default path costs nothing.
- *
- * @param rows - Extracted transaction rows for this page.
- * @param context - Account, action context and mediator from the driver.
- * @param apiHost
- * @returns The same rows, some carrying a detail outcome.
+ * @param apiHost - The bank's API origin.
+ * @returns The `enrichRows` hook a shape declares.
  */
 export function buildDetailEnrichHook(
   apiHost: string,
-): (rows: readonly object[], context: IEnrichRowsContext<IDigitalV3Card>) => Promise<readonly object[]> {
-  return async (rows, context) => {
+): (
+  rows: readonly object[],
+  context: IEnrichRowsContext<IDigitalV3Card>,
+) => Promise<readonly object[]> {
+  return async (rows, context): Promise<readonly object[]> => {
     const options = context.ctx.options.cardDetail;
     if (!options?.enabled) return rows;
-
-    return enrichCardDetail(rows as readonly Record<string, unknown>[], {
-      post: bindDetailPost(context.bus, apiHost),
-      options,
-      account: { cardSuffix: context.acct.cardSuffix, companyCode: context.acct.companyCode },
-      /**
-       *
-       */
-      now: () => Date.now(),
-      /**
-       *
-       * @param ms
-       */
-      sleep: async (ms): Promise<void> => {
-        await new Promise((resolve): NodeJS.Timeout => setTimeout(resolve, ms));
-      },
-      /**
-       *
-       */
-      jitter: () => Math.random(),
-    });
+    const deps = buildDetailDeps(context, apiHost, options);
+    return enrichCardDetail(rows as readonly Record<string, unknown>[], deps);
   };
 }

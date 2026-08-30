@@ -1,13 +1,14 @@
 /**
- * DigitalV3 transaction-details enrichment — the request loop.
+ * DigitalV3 transaction-details enrichment — the pass over one page of rows.
  *
  * Shared by Isracard and Amex, which are one company on one API backbone,
  * differing only by domain.
  *
- * Joins the three pure pieces: {@link nextDetailRequest} decides whether a
- * request fits, {@link classifyDetailTransport} judges the response before its
- * body is read, and {@link interpretDetailEnvelope} says what was learned.
- * This file owns only the sequencing and the identity fingerprints.
+ * Joins the pure pieces: `nextDetailRequest` decides whether a request fits,
+ * `classifyDetailTransport` judges the response before its body is read, and
+ * `interpretDetailEnvelope` says what was learned. One request, and the
+ * identity it is made under, live in `TransactionDetailRequest`. This file owns
+ * only the sequencing.
  *
  * Every row comes back, always. A row whose detail could not be fetched is
  * returned unchanged, or carrying an outcome describing why — never dropped.
@@ -15,240 +16,246 @@
  * from it.
  */
 
-import { createHmac } from 'node:crypto';
-
-import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
-import type { Procedure } from '../../../Types/Procedure.js';
-import { isOk } from '../../../Types/Procedure.js';
+import { nextDetailRequest } from './TransactionDetailBudget.js';
 import {
-  type IDetailBudgetLimits,
-  nextDetailRequest,
-  retryFits,
-} from './TransactionDetailBudget.js';
-import {
-  classifyDetailTransport,
-  DIGITALV3_DETAIL_SCHEMA_VERSION,
-  type IDetailOutcome,
-  interpretDetailEnvelope,
-} from './TransactionDetailInterpret.js';
+  canonicalCardId,
+  CARD_SUFFIX,
+  detailBody,
+  fetchOneDetail,
+  fingerprint,
+  notAttempted,
+  voucherOf,
+  withOutcome,
+} from './TransactionDetailRequest.js';
+import type { AmexRow, ICardDetailDeps } from './TransactionDetailTypes.js';
 
-/** Identity of the account being scraped, for deriving stable fingerprints. */
-export interface IDetailIdentityContext {
-  readonly owner: string;
-  readonly provider: string;
-  readonly credentialSetId: string;
+export type {
+  AmexRow,
+  ICardAlias,
+  ICardDetailDeps,
+  ICardDetailOptions,
+  IDetailAccount,
+  IDetailIdentityContext,
+} from './TransactionDetailTypes.js';
+
+/** Resolved once for the whole pass, then read for every row. */
+interface IPassContext {
+  readonly deps: ICardDetailDeps;
+  readonly cardSuffix: string;
+  readonly companyCode: number;
+  readonly canonical: string | false;
+  readonly seen: ReadonlySet<string>;
+  readonly blocked: ReadonlySet<string>;
+  readonly startedAt: number;
 }
 
-/** Maps an observed account fingerprint onto the caller's canonical card id. */
-export interface ICardAlias {
-  readonly observedAccountFingerprint: string;
-  readonly canonicalCardId: string;
-}
-
-/** Everything the enrichment pass needs from its caller. */
-export interface ICardDetailOptions extends IDetailBudgetLimits {
-  readonly enabled: boolean;
-  /** When true, re-fetch detail the caller already holds. */
-  readonly backfillEnabled: boolean;
-  /** Key for the identity fingerprints. Absent disables enrichment entirely. */
-  readonly hmacKey?: string;
-  readonly identityContext?: IDetailIdentityContext;
-  readonly cardAliases?: readonly ICardAlias[];
-  /** Fingerprints already stored — skipped unless backfilling. */
-  readonly existingFingerprints?: readonly string[];
-  /** Fingerprints known to be unproductive — always skipped. */
-  readonly blockedFingerprints?: readonly string[];
-}
-
-/** The card being enriched, as the scrape knows it. */
-export interface IDetailAccount {
-  readonly cardSuffix?: string;
-  readonly companyCode?: number | string;
-}
-
-/** Collaborators, injected so the loop is testable without a browser. */
-export interface ICardDetailDeps {
-  readonly post: (body: Record<string, unknown>, timeoutMs: number) => Promise<Procedure<IPostWithMetadata>>;
-  readonly options: ICardDetailOptions;
-  readonly account: IDetailAccount;
-  readonly now: () => number;
-  readonly sleep: (ms: number) => Promise<void>;
-  /** Value in [0, 1) selecting a pacing delay within the configured range. */
-  readonly jitter: () => number;
-}
-
-/** A raw Amex row, plus the outcome once a detail attempt has been made. */
-type AmexRow = Record<string, unknown>;
-
-/** Field separator for fingerprint inputs — outside the character set of every part. */
-const FIELD_SEPARATOR = '';
-
-/** A four-digit card suffix, the only shape the detail endpoint accepts. */
-const CARD_SUFFIX = /^\d{4}$/;
-
-/**
- * Attach an outcome without disturbing any provider field.
- * @param raw
- * @param outcome
- */
-function withOutcome(raw: AmexRow, outcome: IDetailOutcome): AmexRow {
-  return { ...raw, __detailOutcome: outcome };
+/** How far the pass has got: rows emitted, requests spent, whether to stop. */
+interface IPassState {
+  readonly out: readonly AmexRow[];
+  readonly calls: number;
+  readonly isStopped: boolean;
 }
 
 /**
- * An outcome for a row that was never requested.
- * @param code
+ * Record a row as never asked about.
+ * @param raw - The row as the provider returned it.
+ * @returns The row carrying a not-found outcome.
  */
-function notAttempted(code: IDetailOutcome['outcomeCode']): IDetailOutcome {
-  return {
-    state: 'terminal-failure',
-    outcomeCode: code,
-    detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION,
-    attemptCount: 0,
+function markUnfetchable(raw: AmexRow): AmexRow {
+  const outcome = notAttempted('not-found');
+  return withOutcome(raw, outcome);
+}
+
+/**
+ * Emit a row without spending a request on it.
+ * @param state - The pass state so far.
+ * @param row - The row to emit, already carrying any outcome it earned.
+ * @returns The state with that row appended.
+ */
+function emit(state: IPassState, row: AmexRow): IPassState {
+  return { ...state, out: [...state.out, row] };
+}
+
+/**
+ * True when this row's detail is already held, or known to be unproductive.
+ *
+ * A blocked fingerprint is always skipped; a merely-seen one is skipped unless
+ * the caller asked for a backfill, which is the only mode that re-asks.
+ * @param ctx - Pass context.
+ * @param rowFingerprint - This row's identity fingerprint.
+ * @returns True when the row should be returned untouched.
+ */
+function isAlreadyKnown(ctx: IPassContext, rowFingerprint: string): boolean {
+  if (ctx.blocked.has(rowFingerprint)) return true;
+  if (ctx.deps.options.backfillEnabled) return false;
+  return ctx.seen.has(rowFingerprint);
+}
+
+/** One row and the voucher that identifies it to the detail endpoint. */
+interface IRowTarget {
+  readonly row: AmexRow;
+  readonly voucher: string;
+}
+
+/**
+ * Ask the budget whether one more request fits, at this point in the pass.
+ * @param ctx - Pass context.
+ * @param state - The pass state so far.
+ * @returns Whether to proceed, and the delay to wait first.
+ */
+function decideNextRequest(
+  ctx: IPassContext,
+  state: IPassState,
+): ReturnType<typeof nextDetailRequest> {
+  const elapsedMs = ctx.deps.now() - ctx.startedAt;
+  const jitter = ctx.deps.jitter();
+  return nextDetailRequest(ctx.deps.options, { callsMade: state.calls, elapsedMs, jitter });
+}
+
+/**
+ * The request body for one target row.
+ * @param ctx - Pass context, carrying the card identity.
+ * @param target - The row and its voucher.
+ * @returns The POST body.
+ */
+function buildBody(ctx: IPassContext, target: IRowTarget): Record<string, unknown> {
+  const identity = {
+    cardSuffix: ctx.cardSuffix,
+    companyCode: ctx.companyCode,
+    voucher: target.voucher,
   };
+  return detailBody(target.row, identity);
 }
 
 /**
- * Stable fingerprint over the given parts.
+ * Return a row the budget could not pay for, untouched.
  *
- * Keyed, so a fingerprint is meaningless without the caller's secret and
- * cannot be recomputed from a stored value.
- *
- * @param key - HMAC key.
- * @param parts - Ordered inputs.
- * @returns Hex digest.
+ * Only a wall-clock exhaustion stops the pass: a per-pass call ceiling is
+ * reached in order, so later rows would fail the same check anyway, whereas an
+ * expired clock means nothing further can be attempted at all.
+ * @param state - The pass state so far.
+ * @param row - The row that could not be requested.
+ * @param reason - Which limit was reached.
+ * @returns The state with the row appended, stopped if the clock ran out.
  */
-function fingerprint(key: string, parts: readonly string[]): string {
-  return createHmac('sha256', key).update(parts.join(FIELD_SEPARATOR)).digest('hex');
+function outOfBudget(state: IPassState, row: AmexRow, reason: 'row-limit' | 'wall-clock'): IPassState {
+  const isStopped = state.isStopped || reason === 'wall-clock';
+  return { ...emit(state, row), isStopped };
 }
 
 /**
- * Resolve the caller's canonical id for this card, via its alias table.
+ * Request one row's detail, having decided it is worth asking about.
  *
- * Requires EXACTLY one matching alias. Zero means the caller does not know this
- * card; more than one means its mapping is ambiguous, and guessing would attach
- * one card's detail to another's history.
- *
- * @param options - Pass options carrying the key and alias table.
- * @param cardSuffix - Four-digit suffix of the card being scraped.
- * @returns The canonical id, or undefined when it cannot be resolved uniquely.
+ * Running out of budget is not a failure of this row — it is simply where the
+ * pass ran out, so the row is returned untouched and remains eligible next
+ * time. Only a wall-clock exhaustion stops the pass: a per-pass call ceiling
+ * is reached in order, so later rows would fail the same check anyway.
+ * @param ctx - Pass context.
+ * @param state - The pass state so far.
+ * @param target - The row to enrich and the voucher identifying it.
+ * @returns The state after this row.
  */
-function canonicalCardId(options: ICardDetailOptions, cardSuffix: string): string | undefined {
-  const { hmacKey, identityContext } = options;
-  if (hmacKey === undefined || identityContext === undefined) return undefined;
-  const observed = fingerprint(hmacKey, [
-    identityContext.owner,
-    identityContext.provider,
-    identityContext.credentialSetId,
-    cardSuffix,
-  ]);
-  const matches = (options.cardAliases ?? []).filter(
-    (alias): boolean => alias.observedAccountFingerprint === observed,
-  );
-  return matches.length === 1 ? matches[0]?.canonicalCardId : undefined;
+async function requestRow(
+  ctx: IPassContext,
+  state: IPassState,
+  target: IRowTarget,
+): Promise<IPassState> {
+  const { deps } = ctx;
+  const verdict = decideNextRequest(ctx, state);
+  if (!verdict.proceed) return outOfBudget(state, target.row, verdict.reason);
+  if (verdict.delayMs > 0) await deps.sleep(verdict.delayMs);
+  const body = buildBody(ctx, target);
+  const attempt = await fetchOneDetail(deps, body, ctx.startedAt);
+  const enriched = withOutcome(target.row, attempt.outcome);
+  const next = emit({ ...state, calls: state.calls + 1 }, enriched);
+  return { ...next, isStopped: state.isStopped || attempt.stopPass };
 }
 
 /**
- * Voucher-number keys across the two DigitalV3 banks, most specific first.
- *
- * Amex uses `seqVoucherNumber`; Isracard uses `voucherNumberRatz`, and
- * `…Outbound` on an outbound-currency row. Reading only Amex's names left the
- * majority of Isracard rows with no voucher, so they were recorded as
- * unfetchable and no category was ever requested for them — a quiet loss of
- * most of the enrichment, with nothing failing to show for it.
+ * This row's identity fingerprint, under the caller's key.
+ * @param ctx - Pass context, carrying the key.
+ * @param canonical - The caller's canonical id for this card.
+ * @param voucher - The voucher identifying this transaction.
+ * @returns The fingerprint to check against what the caller already holds.
  */
-const VOUCHER_FIELDS = [
-  'seqVoucherNumber',
-  'voucherNumber',
-  'voucherNumberRatz',
-  'voucherNumberRatzOutbound',
-] as const;
-
-/** All-zeros is this provider's "no voucher" sentinel, not an identifier. */
-const VOUCHER_SENTINEL = /^0+$/;
+function rowKeyOf(ctx: IPassContext, canonical: string, voucher: string): string {
+  const hmacKey = ctx.deps.options.hmacKey ?? '';
+  return fingerprint(hmacKey, [canonical, 'voucher', voucher]);
+}
 
 /**
- * The voucher number identifying one transaction, when it has a usable one.
- * @param raw
+ * Advance the pass by one row.
+ *
+ * A row with no voucher is recorded as unfetchable even once the pass has
+ * stopped, so "we never asked" stays distinguishable from "we asked and learned
+ * nothing" for every row in the page.
+ * @param ctx - Pass context.
+ * @param state - The pass state so far.
+ * @param row - The row to consider.
+ * @returns The state after this row.
  */
-function voucherOf(raw: AmexRow): string | undefined {
-  for (const field of VOUCHER_FIELDS) {
-    const text = String(raw[field] ?? '');
-    if (/^\d+$/.test(text) && !VOUCHER_SENTINEL.test(text)) return text;
+async function stepRow(ctx: IPassContext, state: IPassState, row: AmexRow): Promise<IPassState> {
+  const voucher = voucherOf(row);
+  if (voucher === false) {
+    const unfetchable = markUnfetchable(row);
+    return emit(state, unfetchable);
   }
-  return undefined;
+  const canonical = ctx.canonical;
+  if (state.isStopped || canonical === false) return emit(state, row);
+  const rowFingerprint = rowKeyOf(ctx, canonical, voucher);
+  if (isAlreadyKnown(ctx, rowFingerprint)) return emit(state, row);
+  return requestRow(ctx, state, { row, voucher });
 }
 
 /**
- * Request body for one transaction's detail.
- * @param raw
- * @param cardSuffix
- * @param companyCode
- * @param voucher
+ * Walk the page one row at a time.
+ *
+ * Sequential by construction: the rows share a wall-clock budget and a paced
+ * request rate, so they cannot be issued concurrently. Expressed as a reduce
+ * over a promise chain rather than a `for await`, which is the shape the
+ * pipeline uses elsewhere for the same reason.
+ * @param ctx - Pass context.
+ * @param rows - The page as extracted from the transactions response.
+ * @returns The final pass state.
  */
-function detailBody(raw: AmexRow, cardSuffix: string, companyCode: number, voucher: string): Record<string, unknown> {
+async function walkRows(ctx: IPassContext, rows: readonly AmexRow[]): Promise<IPassState> {
+  const seed: IPassState = { out: [], calls: 0, isStopped: false };
+  const start: Promise<IPassState> = Promise.resolve(seed);
+  return rows.reduce(async (prev, row): Promise<IPassState> => {
+    const state = await prev;
+    return stepRow(ctx, state, row);
+  }, start);
+}
+
+/**
+ * Resolve everything the walk needs that does not change between rows.
+ * @param deps - Injected collaborators.
+ * @param cardSuffix - Four-digit suffix of the card being scraped.
+ * @param companyCode - The issuer's numeric company code.
+ * @returns The pass context.
+ */
+function buildPassContext(
+  deps: ICardDetailDeps,
+  cardSuffix: string,
+  companyCode: number,
+): IPassContext {
   return {
+    deps,
     cardSuffix,
     companyCode,
-    isIsraelDeal: raw.isIsraelDeal !== false,
-    seqVoucherNumber: voucher,
-    isPartner: raw.isPartner === true,
+    canonical: canonicalCardId(deps.options, cardSuffix),
+    seen: new Set(deps.options.existingFingerprints ?? []),
+    blocked: new Set(deps.options.blockedFingerprints ?? []),
+    startedAt: deps.now(),
   };
 }
 
 /**
- * Fetch and interpret one transaction's detail, with a single bounded retry.
+ * Enrich a page of card rows with per-transaction detail.
  *
- * @param deps - Injected collaborators.
- * @param body - Request body for this transaction.
- * @param startedAt - When the pass began, for the retry budget.
- * @returns The outcome, and whether the pass should stop.
- */
-async function fetchOneDetail(
-  deps: ICardDetailDeps,
-  body: Record<string, unknown>,
-  startedAt: number,
-): Promise<{ outcome: IDetailOutcome; stopPass: boolean }> {
-  const { options } = deps;
-  let attempt = await deps.post(body, options.timeoutMs);
-
-  // A transport-level failure (the request never landed) is retried once, but
-  // only if a full delay plus another timeout still fit — otherwise the pass
-  // ends holding a session it can no longer use.
-  if (!isOk(attempt)) {
-    if (!retryFits(options, deps.now() - startedAt)) {
-      return { outcome: { ...notAttempted('transient-failure'), state: 'retryable-failure', attemptCount: 1 }, stopPass: true };
-    }
-    await deps.sleep(options.minDelayMs);
-    attempt = await deps.post(body, options.timeoutMs);
-    if (!isOk(attempt)) {
-      return { outcome: { ...notAttempted('transient-failure'), state: 'retryable-failure', attemptCount: 2 }, stopPass: false };
-    }
-  }
-
-  const verdict = classifyDetailTransport(attempt.value.http);
-  if (verdict !== undefined) {
-    return {
-      outcome: {
-        state: verdict.state,
-        outcomeCode: verdict.code,
-        detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION,
-        attemptCount: 1,
-      },
-      stopPass: verdict.stopPass,
-    };
-  }
-
-  const outcome = interpretDetailEnvelope(attempt.value.envelope);
-  // A shape mismatch means the response no longer looks like what this code
-  // understands. Continuing would spend the budget re-learning that on every
-  // remaining row.
-  return { outcome, stopPass: outcome.state === 'schema-mismatch' };
-}
-
-/**
- * Enrich a page of Amex rows with per-transaction detail.
- *
+ * Without a usable card identity there is nothing to ask about. That is
+ * recorded on every row rather than skipped silently, so "we never asked" is
+ * distinguishable from "we asked and learned nothing".
  * @param rows - Rows as extracted from the transactions response.
  * @param deps - Injected collaborators.
  * @returns The same rows, in the same order, some carrying an outcome.
@@ -259,53 +266,11 @@ export async function enrichCardDetail(
 ): Promise<readonly AmexRow[]> {
   const { options, account } = deps;
   if (!options.enabled || options.hmacKey === undefined) return rows;
-
-  const cardSuffix = String(account.cardSuffix ?? '');
+  const cardSuffix = account.cardSuffix ?? '';
   const companyCode = Number(account.companyCode);
-  // Without a usable card identity there is nothing to ask about. Recorded on
-  // every row rather than skipped silently, so "we never asked" is
-  // distinguishable from "we asked and learned nothing".
-  if (!CARD_SUFFIX.test(cardSuffix) || !Number.isFinite(companyCode)) {
-    return rows.map((raw): AmexRow => withOutcome(raw, notAttempted('not-found')));
-  }
-  const canonical = canonicalCardId(options, cardSuffix);
-
-  const existing = new Set(options.existingFingerprints ?? []);
-  const blocked = new Set(options.blockedFingerprints ?? []);
-  const startedAt = deps.now();
-  const out: AmexRow[] = [];
-  let calls = 0;
-  let stopped = false;
-
-  for (const raw of rows) {
-    const voucher = voucherOf(raw);
-    if (stopped || voucher === undefined || canonical === undefined) {
-      out.push(voucher === undefined ? withOutcome(raw, notAttempted('not-found')) : raw);
-      continue;
-    }
-
-    const rowFingerprint = fingerprint(options.hmacKey, [canonical, 'voucher', voucher]);
-    if (blocked.has(rowFingerprint) || (!options.backfillEnabled && existing.has(rowFingerprint))) {
-      out.push(raw);
-      continue;
-    }
-
-    const verdict = nextDetailRequest(options, calls, deps.now() - startedAt, deps.jitter());
-    if (!verdict.proceed) {
-      // Out of budget is not a failure of this row — it is simply where the
-      // pass ran out, so the row is returned untouched and remains eligible
-      // next time.
-      stopped = verdict.reason === 'wall-clock';
-      out.push(raw);
-      continue;
-    }
-    if (verdict.delayMs > 0) await deps.sleep(verdict.delayMs);
-
-    calls += 1;
-    const result = await fetchOneDetail(deps, detailBody(raw, cardSuffix, companyCode, voucher), startedAt);
-    if (result.stopPass) stopped = true;
-    out.push(withOutcome(raw, result.outcome));
-  }
-
-  return out;
+  const isUsableCard = CARD_SUFFIX.test(cardSuffix) && Number.isFinite(companyCode);
+  if (!isUsableCard) return rows.map(markUnfetchable);
+  const ctx = buildPassContext(deps, cardSuffix, companyCode);
+  const finished = await walkRows(ctx, rows);
+  return finished.out;
 }

@@ -29,6 +29,14 @@ export type BudgetVerdict =
   | { readonly proceed: true; readonly delayMs: number }
   | { readonly proceed: false; readonly reason: 'row-limit' | 'wall-clock' };
 
+/** What a pass has spent so far, plus the jitter selecting this row's delay. */
+export interface IDetailBudgetSpend {
+  readonly callsMade: number;
+  readonly elapsedMs: number;
+  /** Value in [0, 1) selecting a delay within the configured range. */
+  readonly jitter: number;
+}
+
 /**
  * Decide whether one more detail request fits, and how long to wait first.
  *
@@ -38,17 +46,14 @@ export type BudgetVerdict =
  * which is how a pass overruns while every individual check passed.
  *
  * @param limits - The pass's limits.
- * @param callsMade - Requests already issued this pass.
- * @param elapsedMs - Wall-clock milliseconds already spent.
- * @param jitter - Value in [0, 1) selecting a delay within the range.
+ * @param spent - What the pass has spent so far, and this row's jitter.
  * @returns Whether to proceed, and the delay to wait first.
  */
 export function nextDetailRequest(
   limits: IDetailBudgetLimits,
-  callsMade: number,
-  elapsedMs: number,
-  jitter: number,
+  spent: IDetailBudgetSpend,
 ): BudgetVerdict {
+  const { callsMade, elapsedMs, jitter } = spent;
   if (callsMade >= limits.maxRows) return { proceed: false, reason: 'row-limit' };
   if (elapsedMs >= limits.maxWallMs) return { proceed: false, reason: 'wall-clock' };
 

@@ -97,25 +97,40 @@ export interface IDetailOutcome {
 
 /**
  * Collapse runs of whitespace so comparisons do not turn on formatting.
- * @param value
+ * @param value - Any provider field; non-strings collapse to the empty string.
+ * @returns The trimmed, single-spaced text.
  */
 function tidy(value: unknown): string {
   return typeof value === 'string' ? value.trim().replaceAll(/\s+/g, ' ') : '';
 }
 
-/**
- * Fields worth keeping from a detail response body.
- * @param data
- */
-function captureFields(data: Record<string, unknown>): {
+/** The captured subset of a detail body: an issuer category and kept fields. */
+interface ICapturedDetail {
   sourceCategory?: string;
   detailPayload?: Record<string, unknown>;
-} {
-  const payload: Record<string, unknown> = {};
-  for (const field of CAPTURE_FIELDS) {
-    const value = data[field];
-    if (value !== undefined && value !== null) payload[field] = value;
-  }
+}
+
+/**
+ * Copy the whitelisted detail fields that carry a value.
+ *
+ * An allow-list rather than the whole body: this is stored, and a provider that
+ * starts returning a new field should not silently widen what is persisted.
+ * @param data - The response's `data` object.
+ * @returns The kept fields, empty when none carried a value.
+ */
+function capturePayload(data: Record<string, unknown>): Record<string, unknown> {
+  const kept = CAPTURE_FIELDS.map((field): readonly [string, unknown] => [field, data[field]]);
+  const present = kept.filter(([, value]): boolean => value !== undefined && value !== null);
+  return Object.fromEntries(present);
+}
+
+/**
+ * Fields worth keeping from a detail response body.
+ * @param data - The response's `data` object.
+ * @returns The issuer category and kept payload, each absent when empty.
+ */
+function captureFields(data: Record<string, unknown>): ICapturedDetail {
+  const payload = capturePayload(data);
   const category = tidy(data.branchDescription);
   return {
     sourceCategory: category === '' ? undefined : category,
@@ -130,11 +145,81 @@ function captureFields(data: Record<string, unknown>): {
  * Requires BOTH the wallet label and a counterparty field: the label alone
  * appears on rows that carry no name, and treating those as transfers would
  * produce an outcome claiming a name it does not have.
- * @param data
+ * @param data - The response's `data` object.
+ * @returns True when a counterparty name is worth extracting.
  */
 function isWalletTransfer(data: Record<string, unknown>): boolean {
   if (typeof data.transferBeneficiary !== 'string') return false;
-  return WALLET_LABELS.has(tidy(data.businessName).toUpperCase());
+  const label = tidy(data.businessName).toUpperCase();
+  return WALLET_LABELS.has(label);
+}
+
+/** Every outcome carries the schema version and the attempt that produced it. */
+const OUTCOME_BASE = {
+  detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION,
+  attemptCount: 1,
+} as const;
+
+/** The response no longer looks like what this code understands. */
+const SHAPE_MISMATCH = { state: 'schema-mismatch', outcomeCode: 'shape-mismatch' } as const;
+
+/** The state shared by every outcome a retry could not improve on. */
+const TERMINAL: DetailState = 'terminal-failure';
+
+/** The response parsed and carried nothing this code can use. */
+const NOTHING_USEFUL = { state: TERMINAL, outcomeCode: 'empty-useful-detail' } as const;
+
+/** The response carried something worth storing. */
+const SUCCEEDED = { state: 'succeeded', outcomeCode: 'succeeded' } as const;
+
+/**
+ * The `data` object of a well-formed detail response.
+ *
+ * `isSuccess` is checked here rather than downstream because a body that says
+ * it failed can still carry a `data` object, and reading it would store the
+ * provider's own error shape as though it were detail.
+ * @param envelope - Parsed response body, or null when it did not parse.
+ * @returns The `data` object, or `false` when the envelope is not usable.
+ */
+function detailFieldsOf(envelope: unknown): Record<string, unknown> | false {
+  if (typeof envelope !== 'object' || envelope === null) return false;
+  const body = envelope as Record<string, unknown>;
+  const data = body.data;
+  if (body.isSuccess !== true) return false;
+  if (typeof data !== 'object' || data === null) return false;
+  return data as Record<string, unknown>;
+}
+
+/**
+ * The outcome for a row whose detail is an issuer category, or nothing at all.
+ * @param captured - Fields captured from the response.
+ * @returns A succeeded outcome carrying the category, or a terminal failure.
+ */
+function categoryOutcome(captured: ICapturedDetail): IDetailOutcome {
+  if (captured.sourceCategory === undefined) {
+    return { ...OUTCOME_BASE, ...captured, ...NOTHING_USEFUL };
+  }
+  return { ...OUTCOME_BASE, ...captured, ...SUCCEEDED, detailKind: 'issuer-category' };
+}
+
+/**
+ * The outcome for a peer-to-peer transfer, judged on the name it reported.
+ *
+ * A name that is itself the wallet label carries no more information than the
+ * row already had, and an implausibly long one is an error string rather than a
+ * person. Both are failures, not names — recorded as such rather than written
+ * to a display field.
+ * @param captured - Fields captured from the response.
+ * @param name - The counterparty name, already tidied.
+ * @returns A succeeded outcome carrying the name, or a terminal failure.
+ */
+function counterpartyOutcome(captured: ICapturedDetail, name: string): IDetailOutcome {
+  const isUnusable = name === '' || name.length > MAX_COUNTERPARTY_NAME;
+  const upper = name.toUpperCase();
+  if (isUnusable || WALLET_LABELS.has(upper)) {
+    return { ...OUTCOME_BASE, ...captured, ...NOTHING_USEFUL };
+  }
+  return { ...OUTCOME_BASE, ...captured, ...SUCCEEDED, counterpartyDisplayName: name };
 }
 
 /**
@@ -149,85 +234,10 @@ function isWalletTransfer(data: Record<string, unknown>): boolean {
  * @returns The outcome to store against the transaction.
  */
 export function interpretDetailEnvelope(envelope: unknown): IDetailOutcome {
-  const base = { detailSchemaVersion: DIGITALV3_DETAIL_SCHEMA_VERSION, attemptCount: 1 } as const;
-
-  if (typeof envelope !== 'object' || envelope === null) {
-    return { ...base, state: 'schema-mismatch', outcomeCode: 'shape-mismatch' };
-  }
-  const body = envelope as Record<string, unknown>;
-  const data = body.data;
-  if (body.isSuccess !== true || typeof data !== 'object' || data === null) {
-    return { ...base, state: 'schema-mismatch', outcomeCode: 'shape-mismatch' };
-  }
-
-  const fields = data as Record<string, unknown>;
+  const fields = detailFieldsOf(envelope);
+  if (fields === false) return { ...OUTCOME_BASE, ...SHAPE_MISMATCH };
   const captured = captureFields(fields);
-
-  if (!isWalletTransfer(fields)) {
-    if (captured.sourceCategory === undefined) {
-      return { ...base, ...captured, state: 'terminal-failure', outcomeCode: 'empty-useful-detail' };
-    }
-    return {
-      ...base,
-      ...captured,
-      state: 'succeeded',
-      outcomeCode: 'succeeded',
-      detailKind: 'issuer-category',
-    };
-  }
-
+  if (!isWalletTransfer(fields)) return categoryOutcome(captured);
   const name = tidy(fields.transferBeneficiary);
-  // A name that is itself the wallet label carries no more information than the
-  // row already had, and an implausibly long one is an error string rather than
-  // a person. Both are failures, not names.
-  if (name === '' || name.length > MAX_COUNTERPARTY_NAME || WALLET_LABELS.has(name.toUpperCase())) {
-    return { ...base, ...captured, state: 'terminal-failure', outcomeCode: 'empty-useful-detail' };
-  }
-  return { ...base, ...captured, state: 'succeeded', outcomeCode: 'succeeded', counterpartyDisplayName: name };
-}
-
-/** Transport facts needed to judge whether a response is worth interpreting. */
-export interface IDetailTransport {
-  readonly status: number;
-  readonly contentType: string;
-  readonly redirected: boolean;
-  readonly sameOrigin: boolean;
-}
-
-/**
- * Classify a response by its transport facts alone, before its body is read.
- *
- * Returns `undefined` when the response is worth interpreting. Otherwise it
- * names the failure — and whether it should stop the whole enrichment pass.
- *
- * Auth expiry and throttling stop the pass: continuing would spend the
- * remaining budget on requests that cannot succeed, against an endpoint behind
- * the same protections as login.
- *
- * @param meta - Transport metadata, or undefined when the request never landed.
- * @returns The failure classification, or undefined when the body is usable.
- */
-export function classifyDetailTransport(
-  meta: IDetailTransport | undefined,
-): { code: DetailOutcomeCode; state: DetailState; stopPass: boolean } | undefined {
-  if (meta === undefined) {
-    return { code: 'transient-failure', state: 'retryable-failure', stopPass: false };
-  }
-  if (meta.status === 429) return { code: 'throttled', state: 'terminal-failure', stopPass: true };
-  if (meta.status === 401 || meta.status === 403) {
-    return { code: 'auth-expired', state: 'terminal-failure', stopPass: true };
-  }
-  // A redirect or a cross-origin answer means we were bounced somewhere else
-  // entirely — indistinguishable in effect from an expired session.
-  if (meta.redirected || !meta.sameOrigin) {
-    return { code: 'auth-expired', state: 'terminal-failure', stopPass: true };
-  }
-  if (!meta.contentType.toLowerCase().includes('application/json')) {
-    return { code: 'auth-expired', state: 'terminal-failure', stopPass: true };
-  }
-  if (meta.status >= 500) return { code: 'transient-failure', state: 'retryable-failure', stopPass: false };
-  if (meta.status < 200 || meta.status >= 300) {
-    return { code: 'transient-failure', state: 'retryable-failure', stopPass: false };
-  }
-  return undefined;
+  return counterpartyOutcome(captured, name);
 }
