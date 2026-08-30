@@ -14,6 +14,22 @@
  * targets cannot be in that map — the discovery has to be taken again against
  * the page as it now stands.
  *
+ * <p>WHERE THAT RE-DISCOVERY HAS TO HAPPEN, AND WHY NOT HERE. Not in the LOGIN
+ * ACTION. `IActionMediator` is sealed against discovery on purpose — "NO
+ * resolveField, resolveVisible, discoverForm, resolveClickable. The compiler
+ * rejects any discovery call through this interface" — and `IActionContext`
+ * carries neither the page nor an element mediator, so the seal is structural
+ * rather than advisory. Threading discovery into ACTION would break an
+ * invariant this codebase enforces at the type level.
+ *
+ * <p>The shape that respects it is a REPEATED PRE/ACTION pair: each stage
+ * discovers in its own PRE, where discovery is allowed, and fills in its own
+ * ACTION, where it is not. A phase runs its four stages once, so expressing
+ * that is a phase-level question — the builder emitting one LOGIN pass per
+ * stage is the smallest form of it, and needs no new capability. That decision
+ * belongs to this project, which is why this module stops at the contract and
+ * the per-stage walk, and takes its collaborators as arguments.
+ *
  * <p>WHAT THIS DELIBERATELY DOES NOT DO. It never submits. The final stage is
  * left to the ordinary fill-and-submit path, so the submit decision, its
  * benign-rejection handling and its diagnostics stay in exactly one place.
