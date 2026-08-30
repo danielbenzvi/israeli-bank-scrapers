@@ -309,13 +309,22 @@ function buildMappedTxn(input: IBuildTxnInput): ITransaction {
  * a per-transaction detail pass made of it, gets that back on the mapped
  * transaction. The mapper names no bank — it only forwards what it was given.
  *
+ * <p>Gated on EITHER signal, never on provenance alone. Provenance is attached
+ * while merging response containers, which only some shapes need; a detail
+ * outcome is attached by enrichment, which any shape can run. Requiring
+ * provenance silently discarded the outcome for every bank that does not
+ * produce it — the enrichment ran, spent its requests against a rate-limited
+ * endpoint, and its result was dropped one layer later with nothing to show
+ * for it. Nothing failed and no row was lost; the work was simply invisible.
+ *
  * @param raw - Raw transaction record.
- * @returns The provenance bundle, or undefined when the shape attached none.
+ * @returns The provenance bundle, or undefined when the shape attached neither.
  */
 function resolveRowProvenance(raw: ApiRecord): Record<string, unknown> | undefined {
   const provenance = raw?.__rowProvenance;
-  if (provenance === undefined) return undefined;
-  return { ...(provenance as Record<string, unknown>), detailOutcome: raw?.__detailOutcome };
+  const detailOutcome = raw?.__detailOutcome;
+  if (provenance === undefined && detailOutcome === undefined) return undefined;
+  return { ...((provenance ?? {}) as Record<string, unknown>), detailOutcome };
 }
 
 /**
