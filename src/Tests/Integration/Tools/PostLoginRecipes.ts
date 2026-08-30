@@ -379,6 +379,13 @@ const BANK_RECIPES: Readonly<Partial<Record<string, IRecipeBody>>> = {
       { stepName: '03-after-flip', revealText: 'או כניסה עם סיסמה קבועה' },
     ],
   },
+  cibus: {
+    steps: [
+      { stepName: '01-home', url: 'https://consumers.pluxee.co.il' },
+      { stepName: '02-pre-login', url: 'https://consumers.pluxee.co.il/login' },
+      { stepName: '03-after-flip', revealText: 'סיסמה קבועה' },
+    ],
+  },
   hapoalim: {
     steps: [
       { stepName: '01-home', url: 'https://www.bankhapoalim.co.il' },

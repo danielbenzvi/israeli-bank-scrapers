@@ -142,9 +142,27 @@ const NO_UNRESOLVED_FIELD = '';
 function findUnresolvedFieldKey(p: IAssertResolvedArgs): string {
   const resolvedKeys = p.entries.map(([key]): string => key);
   const resolved = new Set(resolvedKeys);
-  const missing = p.config.fields.find((f): boolean => !resolved.has(f.credentialKey));
-  if (!missing) return NO_UNRESOLVED_FIELD;
-  return missing.credentialKey;
+  const expected = expectedKeysFor(p.config);
+  const missing = expected.find((key): boolean => !resolved.has(key));
+  if (missing === undefined) return NO_UNRESOLVED_FIELD;
+  return missing;
+}
+
+/**
+ * The credential keys that must be resolvable on the page RIGHT NOW.
+ *
+ * Every declared field, for the ordinary login where all inputs are present at
+ * once. For a staged login it is the FIRST stage's keys: the later inputs do
+ * not exist in the DOM until an earlier stage has been submitted and answered,
+ * so demanding them here reports a missing field for a form that is behaving
+ * exactly as its provider intends.
+ * @param config - The bank's login config.
+ * @returns Credential keys expected at this point in the login.
+ */
+function expectedKeysFor(config: IAssertResolvedArgs['config']): readonly string[] {
+  const firstStage = config.stages?.[0];
+  if (firstStage) return firstStage.credentialKeys;
+  return config.fields.map((f): string => f.credentialKey);
 }
 
 /**
@@ -165,7 +183,7 @@ function assertEveryFieldResolved(p: IAssertResolvedArgs): Procedure<boolean> {
   const unresolved = findUnresolvedFieldKey(p);
   if (unresolved === NO_UNRESOLVED_FIELD) return succeed(true);
   const field = maskVisibleText(unresolved);
-  const counts = { resolved: p.entries.length, declared: p.config.fields.length };
+  const counts = { resolved: p.entries.length, declared: expectedKeysFor(p.config).length };
   p.logger.error({ event: 'login.fields_unresolved', field, ...counts });
   return fail(ScraperErrorTypes.Generic, `Login field not found on page: ${unresolved}`);
 }

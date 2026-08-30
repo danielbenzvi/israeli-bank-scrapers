@@ -1,0 +1,38 @@
+[
+  {
+    "index": 0,
+    "name": "",
+    "url": "https://consumers.pluxee.co.il/login",
+    "file": "frame-0.html"
+  },
+  {
+    "index": 1,
+    "name": "",
+    "url": "about:blank",
+    "file": "frame-1.html"
+  },
+  {
+    "index": 2,
+    "name": "glassix-widget-iframe",
+    "url": "https://static.glassix.com/widget/conversations/6a75fc07-5818-41f7-8a45-cc712eb7482a",
+    "file": "frame-2.html"
+  },
+  {
+    "index": 3,
+    "name": "_hjSafeContext_99244661",
+    "url": "about:blank",
+    "file": "frame-3.html"
+  },
+  {
+    "index": 4,
+    "name": "a-krii5jwzu0qg",
+    "url": "https://www.google.com/recaptcha/api2/anchor",
+    "file": "frame-4.html"
+  },
+  {
+    "index": 5,
+    "name": "",
+    "url": "about:blank",
+    "file": "frame-5.html"
+  }
+]

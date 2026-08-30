@@ -1,0 +1,20 @@
+[
+  {
+    "index": 0,
+    "name": "",
+    "url": "https://consumers.pluxee.co.il/",
+    "file": "frame-0.html"
+  },
+  {
+    "index": 1,
+    "name": "",
+    "url": "about:blank",
+    "file": "frame-1.html"
+  },
+  {
+    "index": 2,
+    "name": "glassix-widget-iframe",
+    "url": "https://static.glassix.com/widget/conversations/6a75fc07-5818-41f7-8a45-cc712eb7482a",
+    "file": "frame-2.html"
+  }
+]

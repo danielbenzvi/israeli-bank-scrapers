@@ -1,10 +1,14 @@
 [
   {
     "name": "01-home",
-    "finalUrl": "https://consumers.pluxee.co.il/"
+    "finalUrl": "https://consumers.pluxee.co.il/login"
   },
   {
     "name": "02-pre-login",
+    "finalUrl": "https://consumers.pluxee.co.il/login"
+  },
+  {
+    "name": "03-after-flip",
     "finalUrl": "https://consumers.pluxee.co.il/login"
   }
 ]

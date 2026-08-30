@@ -36,13 +36,22 @@ import { CIBUS_SHAPE } from './scrape/CibusShape.js';
  * by the form only when present.
  */
 const CIBUS_LOGIN: ILoginConfig = {
-  loginUrl: 'https://consumers.pluxee.co.il',
+  loginUrl: 'https://consumers.pluxee.co.il/login',
   fields: [
     { credentialKey: 'username', selectors: [] },
     { credentialKey: 'password', selectors: [] },
   ],
   submit: [],
   possibleResults: { success: [] },
+  // Staged, because the password input does not exist until the identifier has
+  // been submitted: the provider answers it with whether a `company` field is
+  // also required, and renders the rest of the form from that answer. Measured
+  // on the live page — a capture after the identify step carries two inputs and
+  // no password field, and a reveal click changes the document by six bytes.
+  stages: [
+    { credentialKeys: ['username'], advance: [] },
+    { credentialKeys: ['password'] },
+  ],
 };
 
 /**
