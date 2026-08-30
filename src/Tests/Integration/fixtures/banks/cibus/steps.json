@@ -1,0 +1,10 @@
+[
+  {
+    "name": "01-home",
+    "finalUrl": "https://consumers.pluxee.co.il/"
+  },
+  {
+    "name": "02-pre-login",
+    "finalUrl": "https://consumers.pluxee.co.il/login"
+  }
+]

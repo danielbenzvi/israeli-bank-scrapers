@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+  <head>
+    <meta charset="utf-8" />
+    <title>Cibus Pluxee</title>
+  </head>
+  <body>
+    <!--
+      Transitional placeholder for the SPA login shell — see
+      .github/banks-pending-reharvest.txt.
+
+      This is NOT a harvester assumption. A full network capture of a real
+      login was taken and inspected: the document served at
+      https://consumers.pluxee.co.il/login is ~3 KB and contains <app-root>,
+      seven <script> tags, ZERO <form> elements and ZERO <input> elements.
+      The credential form is constructed by Angular after hydration, so no
+      capture of the wire can contain it, however the harvester is driven.
+
+      That is also why this bank needs no captcha handling of its own: the
+      provider's own script mints the reCAPTCHA v3 token and puts it in the
+      auth request body on submit, which driving the real form reproduces.
+
+      cibus declares requiresHydration=true and stays on the pending-reharvest
+      allow-list until a hydration-aware HarvestBankHtml.ts run captures the
+      rendered username / password inputs. No PII.
+    -->
+    <app-root></app-root>
+  </body>
+</html>

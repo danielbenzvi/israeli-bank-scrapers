@@ -188,6 +188,13 @@ const BANK_FIXTURE_EXPECTATIONS: readonly IBankFixtureExpectations[] = [
     ],
   },
   {
+    bankId: 'cibus',
+    originUrl: 'https://consumers.pluxee.co.il',
+    loginStep: '02-pre-login',
+    requiresHydration: true,
+    steps: [{ stepName: '01-home' }, { stepName: '02-pre-login' }],
+  },
+  {
     bankId: 'discount',
     originUrl: 'https://start.telebank.co.il',
     loginStep: '02-pre-login',

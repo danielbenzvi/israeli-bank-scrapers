@@ -18,7 +18,7 @@
 #
 # Format: one bankId per line. Lines starting with `#` are comments.
 #
-# ── Currently pending (4) ──
+# ── Currently pending (5) ──
 #
 # Massad      recipe gap: login form has a tab/accordion-toggle UI
 #             that reveals the password tab only after click. Harvester
@@ -39,6 +39,18 @@ otsarHahayal
 #             Pipeline is registered + WellKnown-resolvable; requiresHydration
 #             stays true until a full HarvestBankHtml.ts run.
 yahav
+#
+# Cibus       recipe gap: Pluxee consumer portal is an Angular SPA. A full
+#             network capture of a real login was inspected: the document at
+#             /login is ~3 KB, carries <app-root> and seven <script> tags, and
+#             contains ZERO <form> and ZERO <input> elements. The credential
+#             form is built after hydration, so NO capture of the wire can
+#             contain it — this is a hydration gap, not a missing click step.
+#             Harvester needs SPA-hydration-aware capture before the loginStep
+#             HTML will carry the username / password inputs. Pipeline is
+#             registered + WellKnown-resolvable; requiresHydration stays true
+#             until a full HarvestBankHtml.ts run.
+cibus
 #
 # ── Resolved (kept for traceability) ──
 # visaCal     RESOLVED in PR #335 C7: harvester gained frame-aware reveal
