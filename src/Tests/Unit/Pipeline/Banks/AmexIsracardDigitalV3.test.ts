@@ -43,6 +43,20 @@ interface IDigitalV3Mod {
   mergeRows(body: object): readonly IMergedRow[];
 }
 
+/**
+ * One merged row with its provenance key removed.
+ *
+ * Lets a test assert that every provider field survived the merge untouched,
+ * separately from what provenance was added.
+ * @param row - A row as `mergeRows` emitted it.
+ * @returns The same row without the reserved provenance key.
+ */
+function dropProvenance(row: IMergedRow): object {
+  const copy: Record<string, unknown> = { ...row };
+  delete copy.__rowProvenance;
+  return copy;
+}
+
 interface IBank {
   readonly name: string;
   readonly api: string;
@@ -184,8 +198,8 @@ describe.each(BANKS)('$name DigitalV3 shape', bank => {
     // Every provider field survives untouched; the only addition is provenance
     // under a reserved key, which records which container each row came from
     // — a distinction the concatenation would otherwise destroy.
-    const withoutProvenance = merged.map(({ __rowProvenance: _drop, ...rest }): object => rest);
-    expect(withoutProvenance).toEqual([{ a: 1 }, { v: 2 }, { o: 3 }]);
+    const providerFields = merged.map(dropProvenance);
+    expect(providerFields).toEqual([{ a: 1 }, { v: 2 }, { o: 3 }]);
   });
 
   it('mergeRows flattens several per-currency-date groups', () => {
