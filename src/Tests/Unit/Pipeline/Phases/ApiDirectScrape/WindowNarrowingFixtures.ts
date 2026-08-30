@@ -20,6 +20,7 @@ import type { IActionContext } from '../../../../../Scrapers/Pipeline/Types/Pipe
 import {
   AMEX_SHAPE,
   BEINLEUMI_SHAPE,
+  CIBUS_SHAPE,
   DISCOUNT_SHAPE,
   HAPOALIM_SHAPE,
   ISRACARD_SHAPE,
@@ -374,6 +375,7 @@ export function renderWalk(txns: ITxnsLike, ctx: IActionContext): WalkFingerprin
 export const WINDOW_NARROWING_CASES: readonly IWindowNarrowingCase[] = [
   { bank: 'amex', txns: AMEX_SHAPE.transactions },
   { bank: 'beinleumi', txns: BEINLEUMI_SHAPE.transactions },
+  { bank: 'cibus', txns: CIBUS_SHAPE.transactions },
   { bank: 'discount', txns: DISCOUNT_SHAPE.transactions },
   { bank: 'hapoalim', txns: HAPOALIM_SHAPE.transactions },
   { bank: 'isracard', txns: ISRACARD_SHAPE.transactions },
