@@ -18,7 +18,7 @@ import type {
 } from '../../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
 import type { ICibusBudgetResponse } from './CibusMapping.js';
 import { toAccountBalance } from './CibusMapping.js';
-import { CIBUS_ACCOUNT, dataUrl, type ICibusAcct, VERB_BUDGETS } from './CibusShapeHelpers.js';
+import { CIBUS_ACCOUNT, CIBUS_DATA_HEADERS, dataUrl, type ICibusAcct, VERB_BUDGETS } from './CibusShapeHelpers.js';
 
 /**
  * No request is made, so no variables are needed.
@@ -78,5 +78,6 @@ export const CIBUS_BALANCE: IApiDirectScrapeBalanceStep<ICibusAcct> = {
   extract: extractBalance,
   urlTag: dataUrl,
   method: 'POST',
+  extraHeaders: CIBUS_DATA_HEADERS,
   fallbackOnFail: 0,
 };

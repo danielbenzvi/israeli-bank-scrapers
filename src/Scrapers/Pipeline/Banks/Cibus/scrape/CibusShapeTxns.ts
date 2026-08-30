@@ -29,7 +29,7 @@ import type { IPage } from '../../../Strategy/Fetch/Pagination.js';
 import type { IActionContext } from '../../../Types/PipelineContext.js';
 import type { ICibusDataResponse } from './CibusMapping.js';
 import { partitionByActivity } from './CibusMapping.js';
-import { dataUrl, type ICibusAcct, VERB_DEALS } from './CibusShapeHelpers.js';
+import { CIBUS_DATA_HEADERS, dataUrl, type ICibusAcct, VERB_DEALS } from './CibusShapeHelpers.js';
 
 /** The provider's own date format, which its filters expect. */
 const PROVIDER_DATE_FORMAT = 'DD/MM/YYYY';
@@ -115,6 +115,7 @@ export const CIBUS_TXNS: IApiDirectScrapeTxnsStep<ICibusAcct, number> = {
   windowNarrowing: 'windowEnd',
   urlTag: dataUrl,
   method: 'POST',
+  extraHeaders: CIBUS_DATA_HEADERS,
 };
 
 export { PROVIDER_DATE_FORMAT, toProviderDate };

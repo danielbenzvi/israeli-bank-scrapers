@@ -12,6 +12,30 @@ import { literalUrl, type WKUrlOrLiteral } from '../../../Registry/WK/UrlsWK.js'
 /** The provider's single verb-dispatched data endpoint. */
 const CIBUS_DATA_URL = 'https://api.consumers.pluxee.co.il/api/main.py';
 
+/**
+ * Client identifier the provider's own front end sends on every data call.
+ *
+ * NOT optional, and its absence does not fail loudly: without it the API
+ * answers a valid session with an empty result rather than an error, which
+ * reads as "no transactions" — a scrape that reports success and silently
+ * carries nothing. Public by construction; it identifies the web client, not
+ * the account.
+ */
+const APPLICATION_ID = 'E5D5FEF5-A05E-4C64-AEBA-BA0CECA0E402';
+
+/**
+ * Headers the provider's own front end sends on every data call.
+ *
+ * Sent the same way for the same reason: this endpoint answers a request that
+ * merely looks unfamiliar with an empty body rather than a refusal.
+ */
+export const CIBUS_DATA_HEADERS: Readonly<Record<string, string>> = Object.freeze({
+  'Content-Type': 'application/json',
+  accept: 'application/json, text/plain, */*',
+  'accept-language': 'he',
+  'application-id': APPLICATION_ID,
+});
+
 /** Verb naming the purchase feed. */
 export const VERB_DEALS = 'prx_user_deals';
 

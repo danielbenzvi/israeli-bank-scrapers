@@ -65,7 +65,11 @@ function buildCibusPipeline(options: ScraperOptions): Procedure<IPipelineDescrip
     .withBrowser()
     .withDeclarativeLogin(CIBUS_LOGIN)
     .withOtpTrigger()
-    .withOtpFill()
+    // required=false: the device token suppresses the challenge for ~30 days,
+    // so on a warm run there is no code input on the page and its absence is
+    // the expected state rather than a failure — the same reason Hapoalim
+    // declares it. A cold run still fills it.
+    .withOtpFill(false)
     .withBrowserApiDirect(CIBUS_SHAPE)
     .build();
 }
