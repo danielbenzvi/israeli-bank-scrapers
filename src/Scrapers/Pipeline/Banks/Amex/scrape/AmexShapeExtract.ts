@@ -83,6 +83,73 @@ function voucherRows(data: ITxnsData): readonly AmexTxn[] {
   return data.israelAbroadVouchers?.vouchers?.israelAbroadVouchersList ?? [];
 }
 
+/** Which container a row was merged from. */
+export type AmexRowClass = 'approval' | 'voucher' | 'outOfStatement';
+
+/**
+ * Where a merged row came from, and which field its amount was read out of.
+ *
+ * Once the three containers are concatenated this distinction is otherwise
+ * unrecoverable, and it is load-bearing: an approval is a pending
+ * authorisation, a voucher is a charge settled within the statement cycle, and
+ * an out-of-statement row is one settled outside it. The containers do not
+ * agree on which key carries the amount. A consumer reasoning about direction
+ * or settlement state cannot do so from the merged row alone.
+ */
+export interface IAmexRowProvenance {
+  readonly rowClass: AmexRowClass;
+  /** The amount key present on this row, if any known one was. */
+  readonly amountField?: string;
+  /** That key's value, before any normalisation. */
+  readonly rawAmount?: unknown;
+  /**
+   * Fields a consumer needs to judge direction and settlement for itself,
+   * carried verbatim because the merged row is otherwise the only place they
+   * exist and mapping discards them.
+   */
+  readonly dealSumType?: unknown;
+  readonly rawStatus?: unknown;
+  readonly rawDirection?: unknown;
+}
+
+/** Row shape after {@link mergeAmexRows}, carrying its own provenance. */
+export type AmexRowWithProvenance = AmexTxn & { readonly __rowProvenance: IAmexRowProvenance };
+
+/**
+ * Amount keys the two containers use, most specific first: ILS billing wins
+ * over the generic billing amount, which wins over the deal/payment sums.
+ */
+const AMOUNT_FIELDS = [
+  'ilsBillingAmount',
+  'billingAmount',
+  'dealSum',
+  'dealSumOutbound',
+  'paymentSum',
+  'paymentSumOutbound',
+] as const;
+
+/**
+ * Attach provenance to one row without altering any of its own fields.
+ * @param raw - Row as the provider returned it.
+ * @param rowClass - Container the row came from.
+ * @returns The row plus its provenance.
+ */
+function withProvenance(raw: AmexTxn, rowClass: AmexRowClass): AmexRowWithProvenance {
+  const amountField = AMOUNT_FIELDS.find((key): boolean => key in raw);
+  // Amount keys are spread in only when found, so a row with no recognised
+  // amount field carries `{ rowClass }` alone rather than two undefined keys.
+  return {
+    ...raw,
+    __rowProvenance: {
+      rowClass,
+      ...(amountField === undefined ? {} : { amountField, rawAmount: raw[amountField] }),
+      dealSumType: raw.dealSumType,
+      rawStatus: raw.status,
+      rawDirection: raw.creditDebit ?? raw.direction ?? raw.debitCreditIndicator,
+    },
+  };
+}
+
 /**
  * Charges whose charge-date falls outside the current statement
  * (data.israelAbroadVouchers.outOfStatementChargeDateVouchers[]
@@ -105,15 +172,21 @@ function outOfStatementRows(data: ITxnsData): readonly AmexTxn[] {
 /**
  * Merge every transaction container from one GetTransactionsList response
  * into a single row list. Tolerates a null/absent data block.
+ *
+ * Rows are otherwise untouched — provenance is added under a reserved key
+ * rather than by rewriting any provider field.
+ *
  * @param body - Raw GetTransactionsList response body.
- * @returns Merged transaction rows.
+ * @returns Merged transaction rows, each carrying its provenance.
  */
-export function mergeAmexRows(body: object): readonly object[] {
+export function mergeAmexRows(body: object): readonly AmexRowWithProvenance[] {
   const data = (body as ITxnsResp).data;
   if (!data) return [];
-  const approved = approvedRows(data);
-  const vouchers = voucherRows(data);
-  const outOfStatement = outOfStatementRows(data);
+  const approved = approvedRows(data).map((r): AmexRowWithProvenance => withProvenance(r, 'approval'));
+  const vouchers = voucherRows(data).map((r): AmexRowWithProvenance => withProvenance(r, 'voucher'));
+  const outOfStatement = outOfStatementRows(data).map(
+    (r): AmexRowWithProvenance => withProvenance(r, 'outOfStatement'),
+  );
   return [...approved, ...vouchers, ...outOfStatement];
 }
 

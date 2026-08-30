@@ -1,6 +1,7 @@
 import { type Browser, type BrowserContext, type Page } from 'playwright-core';
 
 import { type CompanyTypes, type ScraperProgressTypes } from '../../Definitions.js';
+import type { ICardDetailOptions } from '../Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailEnrich.js';
 import { type IErrorResult } from './Errors.js';
 import type { LifecyclePromise, VoidResult } from './Interfaces/CallbackTypes.js';
 import type { IDefaultBrowserOptions } from './Interfaces/DefaultBrowserOptions.js';
@@ -73,7 +74,22 @@ export type ScraperCredentials =
       | {
           otpLongTermToken: string;
         }
-    ));
+    ))
+  // Cibus (Pluxee): username + password, plus an optional employer "company"
+  // field whose need the provider's own pre-auth call decides. Given its own
+  // variant rather than widening `{ username, password }`, so no other
+  // scraper's credential shape gains fields it never uses.
+  //
+  // `otpLongTermToken` carries the provider's ~30-day device token, under the
+  // same contract as the two shapes above: the caller receives it through
+  // `onAuthFlowComplete`, persists it, and passes it back on the next run to
+  // suppress the one-time-code challenge.
+  | {
+      username: string;
+      password: string;
+      company?: string;
+      otpLongTermToken?: string;
+    };
 
 export type OptInFeatures =
   | 'isracard-amex:skipAdditionalTransactionInformation'
@@ -215,6 +231,23 @@ export type ScraperOptions = ScraperBrowserOptions & {
    * @default 180000 (3 minutes)
    */
   otpTimeoutMs?: number;
+
+  /**
+   * Isracard/Amex only — fetch per-transaction detail during the scrape.
+   *
+   * The two are one company on one API backbone, so a single option serves
+   * both; a scrape only ever runs one institution.
+   *
+   * Each enriched transaction costs one extra authenticated request against a
+   * rate-limited endpoint, so the pass is bounded by row count, wall clock and
+   * a paced delay, and abandons itself on throttling or an expired session.
+   * Absent or disabled means no extra requests at all.
+   *
+   * Identity is keyed: the caller supplies an HMAC key and its own card
+   * aliases, so nothing here can be correlated back to a card without that
+   * key. See ICardDetailOptions.
+   */
+  cardDetail?: ICardDetailOptions;
 
   /**
    * Login chain log verbosity.

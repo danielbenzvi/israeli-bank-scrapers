@@ -21,6 +21,7 @@
  *     accounts derive purely from session-context (PayBox uId case).
  */
 
+import type { IApiMediator } from '../../Mediator/Api/ApiMediator.types.js';
 import type {
   IAesSignerConfig,
   JsonValueTemplate,
@@ -327,6 +328,13 @@ export interface IApiDirectScrapeBootstrapStep {
   readonly extractPatch: (args: IBootstrapExtractArgs) => Procedure<SessionContextPatch>;
 }
 
+/** What {@link IApiDirectScrapeShape.enrichRows} receives. */
+export interface IEnrichRowsContext<TAcct> {
+  readonly acct: TAcct;
+  readonly ctx: IActionContext;
+  readonly bus: IApiMediator;
+}
+
 /** Shape a bank plugs into createApiDirectScrapePhase. */
 export interface IApiDirectScrapeShape<TAcct, TCursor> {
   readonly stepName: string;
@@ -350,6 +358,22 @@ export interface IApiDirectScrapeShape<TAcct, TCursor> {
    * "not a card issuer", which is what a bank shape wants.
    */
   readonly isCardIssuer?: boolean;
+  /**
+   * Optional per-bank row enrichment, applied after extraction and BEFORE
+   * mapping, so anything it adds is visible to the mapper.
+   *
+   * Declared on the shape rather than branched on in the driver, which states
+   * zero bank-name coupling as a rule. A bank that needs a second request per
+   * transaction plugs it in here; every other shape omits it and pays nothing.
+   *
+   * Contract: MUST return every row it was given. Enrichment adds to a scrape
+   * and must never be able to subtract from it — a dropped row here would
+   * vanish from a scrape that still reports success.
+   */
+  readonly enrichRows?: (
+    rows: readonly object[],
+    context: IEnrichRowsContext<TAcct>,
+  ) => Promise<readonly object[]>;
   /**
    * Optional post-login prime navigation — see {@link IApiDirectScrapePrime}.
    * Absent ⇒ no prime (cookie-only session banks + headless banks).

@@ -116,7 +116,13 @@ async function fetchAccountTxns<TAcct, TCursor>(
 ): Promise<Procedure<IAccountTxns>> {
   const collected = await collectAccountRows(a);
   if (!isOk(collected)) return collected;
-  const txns = refineTxns(a, collected.value.rows);
+  // Enrichment runs on the raw rows, before mapping, so anything it adds is
+  // visible to the mapper. Shapes that declare no hook pay nothing.
+  const rows =
+    a.shape.enrichRows === undefined
+      ? collected.value.rows
+      : await a.shape.enrichRows(collected.value.rows, { acct: a.acct, ctx: a.ctx, bus: a.bus });
+  const txns = refineTxns(a, rows);
   return succeed({ txns, backfillExhausted: collected.value.isBackfillExhausted });
 }
 
