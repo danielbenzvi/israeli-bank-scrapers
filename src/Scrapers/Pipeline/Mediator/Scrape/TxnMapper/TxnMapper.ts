@@ -298,33 +298,7 @@ function buildMappedTxn(input: IBuildTxnInput): ITransaction {
   const base = buildTxnBase(input);
   const restored = restoreProviderFields(input.raw, base.type);
   const suffix = resolveTxnSuffix(input.fields);
-  const rawTransaction = resolveRowProvenance(input.raw);
-  return { ...base, ...suffix, ...resolveTxnEnrichment(input.fields), ...restored, rawTransaction };
-}
-
-/**
- * Forward whatever provenance a shape attached to a raw row.
- *
- * Surfaced generically: any shape that recorded where a row came from, or what
- * a per-transaction detail pass made of it, gets that back on the mapped
- * transaction. The mapper names no bank — it only forwards what it was given.
- *
- * <p>Gated on EITHER signal, never on provenance alone. Provenance is attached
- * while merging response containers, which only some shapes need; a detail
- * outcome is attached by enrichment, which any shape can run. Requiring
- * provenance silently discarded the outcome for every bank that does not
- * produce it — the enrichment ran, spent its requests against a rate-limited
- * endpoint, and its result was dropped one layer later with nothing to show
- * for it. Nothing failed and no row was lost; the work was simply invisible.
- *
- * @param raw - Raw transaction record.
- * @returns The provenance bundle, or undefined when the shape attached neither.
- */
-function resolveRowProvenance(raw: ApiRecord): Record<string, unknown> | undefined {
-  const provenance = raw?.__rowProvenance;
-  const detailOutcome = raw?.__detailOutcome;
-  if (provenance === undefined && detailOutcome === undefined) return undefined;
-  return { ...((provenance ?? {}) as Record<string, unknown>), detailOutcome };
+  return { ...base, ...suffix, ...resolveTxnEnrichment(input.fields), ...restored };
 }
 
 /**
