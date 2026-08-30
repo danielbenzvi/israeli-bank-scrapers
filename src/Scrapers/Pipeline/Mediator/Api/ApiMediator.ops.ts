@@ -6,6 +6,7 @@
 import { resolveWkQuery } from '../../Registry/WK/QueriesWK.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
 import { resolveWkUrl } from '../../Registry/WK/UrlsWK.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { isOk } from '../../Types/Procedure.js';
 import { buildHmacHeaders } from './ApiMediator.hmacHeaders.js';
@@ -17,7 +18,6 @@ import {
   fireQuery,
   NO_EXTRA_HEADERS,
 } from './ApiMediator.transport.js';
-import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type {
   IApiCallContext,
   IApiPostOpArgs,
@@ -110,11 +110,18 @@ async function apiPostWithMetadataOp(args: IApiPostOpArgs): Promise<Procedure<IP
   // Same retry-on-401 wrapper as apiPost: an expired token is a transport
   // concern and is refreshed identically whether or not the caller wanted
   // metadata back.
+  /**
+   *
+   */
   const fire = async (): Promise<Procedure<IPostWithMetadata>> =>
     firePostWithMetadata(buildFirePostArgs(args, urlProc.value));
   return retryOn401Op<IPostWithMetadata>({ state: args.ctx.state, fire });
 }
 
+/**
+ *
+ * @param args
+ */
 async function apiPostOp<T>(args: IApiPostOpArgs): Promise<Procedure<T>> {
   const urlProc = resolveWkUrl(args.wkUrl, args.ctx.bankHint);
   if (!isOk(urlProc)) return urlProc;

@@ -70,5 +70,7 @@ interface IFetchStrategy {
   ): Promise<Procedure<IPostWithMetadata>>;
 }
 
-export type { IFetchOpts, IFetchStrategy, IPostWithMetadata, OnSetCookie, PostData };
+export type { IFetchOpts, IFetchStrategy,  OnSetCookie, PostData };
 export { DEFAULT_FETCH_OPTS };
+
+export {type IPostWithMetadata} from '../../Mediator/Network/Fetch/PageFetchPost.js';

@@ -21,6 +21,7 @@
  *     accounts derive purely from session-context (PayBox uId case).
  */
 
+import type { IApiMediator } from '../../Mediator/Api/ApiMediator.types.js';
 import type {
   IAesSignerConfig,
   JsonValueTemplate,
@@ -28,7 +29,6 @@ import type {
 import type { IDeclaredRowSpec } from '../../Mediator/Scrape/CoverageAudit/DeclaredRows.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
 import type { IPage } from '../../Strategy/Fetch/Pagination.js';
-import type { IApiMediator } from '../../Mediator/Api/ApiMediator.types.js';
 import type { IActionContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import type { WindowNarrowing } from '../../Types/WindowNarrowing.js';

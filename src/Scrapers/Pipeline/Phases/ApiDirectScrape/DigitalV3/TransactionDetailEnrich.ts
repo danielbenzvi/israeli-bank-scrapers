@@ -17,20 +17,20 @@
 
 import { createHmac } from 'node:crypto';
 
-import type { Procedure } from '../../Types/Procedure.js';
-import { isOk } from '../../Types/Procedure.js';
-import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
-import {
-  DIGITALV3_DETAIL_SCHEMA_VERSION,
-  classifyDetailTransport,
-  type IDetailOutcome,
-  interpretDetailEnvelope,
-} from './TransactionDetailInterpret.js';
+import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
+import type { Procedure } from '../../../Types/Procedure.js';
+import { isOk } from '../../../Types/Procedure.js';
 import {
   type IDetailBudgetLimits,
   nextDetailRequest,
   retryFits,
 } from './TransactionDetailBudget.js';
+import {
+  classifyDetailTransport,
+  DIGITALV3_DETAIL_SCHEMA_VERSION,
+  type IDetailOutcome,
+  interpretDetailEnvelope,
+} from './TransactionDetailInterpret.js';
 
 /** Identity of the account being scraped, for deriving stable fingerprints. */
 export interface IDetailIdentityContext {
@@ -86,12 +86,19 @@ const FIELD_SEPARATOR = '';
 /** A four-digit card suffix, the only shape the detail endpoint accepts. */
 const CARD_SUFFIX = /^\d{4}$/;
 
-/** Attach an outcome without disturbing any provider field. */
+/**
+ * Attach an outcome without disturbing any provider field.
+ * @param raw
+ * @param outcome
+ */
 function withOutcome(raw: AmexRow, outcome: IDetailOutcome): AmexRow {
   return { ...raw, __detailOutcome: outcome };
 }
 
-/** An outcome for a row that was never requested. */
+/**
+ * An outcome for a row that was never requested.
+ * @param code
+ */
 function notAttempted(code: IDetailOutcome['outcomeCode']): IDetailOutcome {
   return {
     state: 'terminal-failure',
@@ -141,21 +148,30 @@ function canonicalCardId(options: ICardDetailOptions, cardSuffix: string): strin
   return matches.length === 1 ? matches[0]?.canonicalCardId : undefined;
 }
 
-/** The voucher number identifying one transaction, when it has a usable one. */
+/**
+ * The voucher number identifying one transaction, when it has a usable one.
+ * @param raw
+ */
 function voucherOf(raw: AmexRow): string | undefined {
-  const value = raw['seqVoucherNumber'] ?? raw['voucherNumber'];
+  const value = raw.seqVoucherNumber ?? raw.voucherNumber;
   const text = String(value ?? '');
   return /^\d+$/.test(text) ? text : undefined;
 }
 
-/** Request body for one transaction's detail. */
+/**
+ * Request body for one transaction's detail.
+ * @param raw
+ * @param cardSuffix
+ * @param companyCode
+ * @param voucher
+ */
 function detailBody(raw: AmexRow, cardSuffix: string, companyCode: number, voucher: string): Record<string, unknown> {
   return {
     cardSuffix,
     companyCode,
-    isIsraelDeal: raw['isIsraelDeal'] !== false,
+    isIsraelDeal: raw.isIsraelDeal !== false,
     seqVoucherNumber: voucher,
-    isPartner: raw['isPartner'] === true,
+    isPartner: raw.isPartner === true,
   };
 }
 

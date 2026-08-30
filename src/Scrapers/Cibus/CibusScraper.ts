@@ -1,11 +1,11 @@
 import moment from 'moment';
 
-import { waitUntil } from '../../Common/Waiting.js';
 import { BaseScraperWithBrowser } from '../Base/BaseScraperWithBrowser.js';
 import { createGenericError, createTimeoutError } from '../Base/Errors.js';
 import ScraperErrorTypes from '../Base/ErrorTypes.js';
 import { type IScraperScrapingResult } from '../Base/Interface.js';
 import ScraperError from '../Base/ScraperError.js';
+import { waitUntil } from '../Pipeline/Mediator/Timing/Waiting.js';
 import {
   authFailureFor,
   type IActivityPartition,

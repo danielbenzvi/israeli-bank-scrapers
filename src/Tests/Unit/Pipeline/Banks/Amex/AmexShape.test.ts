@@ -171,6 +171,25 @@ describe('AmexShape transactions', () => {
     expect(page.nextCursor).toBe(1);
   });
 
+  it('txnsExtractPage tags an out-of-statement charge as its own row class', () => {
+    // A third container upstream merges in: charges settled OUTSIDE the
+    // statement cycle. It is neither a pending authorisation nor an
+    // in-statement voucher, so folding it into either would misreport its
+    // settlement state to any consumer reading provenance.
+    const body = {
+      data: {
+        israelAbroadVouchers: {
+          outOfStatementChargeDateVouchers: [
+            { immediateVouchersCurrencyDate: [{ id: 'o1' }] },
+          ],
+        },
+      },
+    };
+    const ctx = ctxWith(new Date(2000, 0, 1), 0);
+    const page = txnsExtractPage({ body, cursor: false, acct: CARD, ctx });
+    expect(page.items).toEqual([{ id: 'o1', __rowProvenance: { rowClass: 'outOfStatement' } }]);
+  });
+
   it('txnsExtractPage tolerates a null data block', () => {
     const ctx = ctxWith(new Date(2000, 0, 1), 0);
     const page = txnsExtractPage({ body: { data: null }, cursor: false, acct: CARD, ctx });

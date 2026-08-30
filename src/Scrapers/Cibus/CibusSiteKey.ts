@@ -15,7 +15,7 @@
  */
 import type { Page } from 'playwright-core';
 
-import { waitUntil } from '../../Common/Waiting.js';
+import { waitUntil } from '../Pipeline/Mediator/Timing/Waiting.js';
 import { IS_RECAPTCHA_READY, READ_SITE_KEY } from './CibusPageScripts.js';
 import {
   APP_BOOT_TIMEOUT_MS,

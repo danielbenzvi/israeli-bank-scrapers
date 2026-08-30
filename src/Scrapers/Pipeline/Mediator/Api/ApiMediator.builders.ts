@@ -11,6 +11,7 @@
 
 import type { WKQueryOperation } from '../../Registry/WK/QueriesWK.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { ITokenContext } from '../../Types/Domain/TokenContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { apiGetOp, apiPostOp, apiPostWithMetadataOp, apiQueryOp } from './ApiMediator.ops.js';
@@ -37,7 +38,6 @@ import type {
 } from './ApiMediator.types.js';
 import type { ITokenResolver } from './ITokenResolver.js';
 import type { ITokenStrategy } from './ITokenStrategy.js';
-import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 
 /**
  * Bind the raw-auth setter to the given mediator state.

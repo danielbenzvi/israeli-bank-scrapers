@@ -95,12 +95,18 @@ export interface IDetailOutcome {
   readonly detailKind?: 'issuer-category';
 }
 
-/** Collapse runs of whitespace so comparisons do not turn on formatting. */
+/**
+ * Collapse runs of whitespace so comparisons do not turn on formatting.
+ * @param value
+ */
 function tidy(value: unknown): string {
-  return typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  return typeof value === 'string' ? value.trim().replaceAll(/\s+/g, ' ') : '';
 }
 
-/** Fields worth keeping from a detail response body. */
+/**
+ * Fields worth keeping from a detail response body.
+ * @param data
+ */
 function captureFields(data: Record<string, unknown>): {
   sourceCategory?: string;
   detailPayload?: Record<string, unknown>;
@@ -110,7 +116,7 @@ function captureFields(data: Record<string, unknown>): {
     const value = data[field];
     if (value !== undefined && value !== null) payload[field] = value;
   }
-  const category = tidy(data['branchDescription']);
+  const category = tidy(data.branchDescription);
   return {
     sourceCategory: category === '' ? undefined : category,
     detailPayload: Object.keys(payload).length === 0 ? undefined : payload,
@@ -124,10 +130,11 @@ function captureFields(data: Record<string, unknown>): {
  * Requires BOTH the wallet label and a counterparty field: the label alone
  * appears on rows that carry no name, and treating those as transfers would
  * produce an outcome claiming a name it does not have.
+ * @param data
  */
 function isWalletTransfer(data: Record<string, unknown>): boolean {
-  if (typeof data['transferBeneficiary'] !== 'string') return false;
-  return WALLET_LABELS.has(tidy(data['businessName']).toUpperCase());
+  if (typeof data.transferBeneficiary !== 'string') return false;
+  return WALLET_LABELS.has(tidy(data.businessName).toUpperCase());
 }
 
 /**
@@ -148,8 +155,8 @@ export function interpretDetailEnvelope(envelope: unknown): IDetailOutcome {
     return { ...base, state: 'schema-mismatch', outcomeCode: 'shape-mismatch' };
   }
   const body = envelope as Record<string, unknown>;
-  const data = body['data'];
-  if (body['isSuccess'] !== true || typeof data !== 'object' || data === null) {
+  const data = body.data;
+  if (body.isSuccess !== true || typeof data !== 'object' || data === null) {
     return { ...base, state: 'schema-mismatch', outcomeCode: 'shape-mismatch' };
   }
 
@@ -169,7 +176,7 @@ export function interpretDetailEnvelope(envelope: unknown): IDetailOutcome {
     };
   }
 
-  const name = tidy(fields['transferBeneficiary']);
+  const name = tidy(fields.transferBeneficiary);
   // A name that is itself the wallet label carries no more information than the
   // row already had, and an implausibly long one is an error string rather than
   // a person. Both are failures, not names.

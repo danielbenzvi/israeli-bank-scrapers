@@ -9,13 +9,13 @@
  * Field names and shapes only; no real values.
  */
 
+import { ScraperErrorTypes } from '../../../../../Scrapers/Base/ErrorTypes.js';
 import {
   enrichCardDetail,
   type ICardDetailDeps,
   type ICardDetailOptions,
-} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/TransactionDetailEnrich.js';
-import { fail, succeed } from '../../../../Scrapers/Pipeline/Types/Procedure.js';
-import { ScraperErrorTypes } from '../../../../Scrapers/Base/ErrorTypes.js';
+} from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailEnrich.js';
+import { fail, succeed } from '../../../../../Scrapers/Pipeline/Types/Procedure.js';
 
 const HMAC_KEY = 'k'.repeat(32);
 const IDENTITY = { owner: 'owner', provider: 'amex', credentialSetId: 'cs-1' };
@@ -33,29 +33,57 @@ const OPTIONS: ICardDetailOptions = {
   cardAliases: [],
 };
 
+/**
+ *
+ * @param n
+ */
 const rows = (n: number) =>
   Array.from({ length: n }, (_, i) => ({ seqVoucherNumber: String(1000 + i), merchantName: 'M' }));
 
-/** Response shaped as the endpoint's success envelope. */
+/**
+ * Response shaped as the endpoint's success envelope.
+ * @param data
+ */
 const okResponse = (data: Record<string, unknown>) =>
   succeed({
     http: { status: 200, contentType: 'application/json', redirected: false, sameOrigin: true },
     envelope: { isSuccess: true, data },
   });
 
+/**
+ *
+ * @param over
+ * @param options
+ */
 function makeDeps(over: Partial<ICardDetailDeps> = {}, options: Partial<ICardDetailOptions> = {}): ICardDetailDeps {
   return {
+    /**
+     *
+     */
     post: async () => okResponse({ businessName: 'M', branchDescription: 'CATEGORY' }),
     options: { ...OPTIONS, ...options },
     account: { cardSuffix: '4821', companyCode: 7 },
+    /**
+     *
+     */
     now: () => 0,
+    /**
+     *
+     */
     sleep: async () => {},
+    /**
+     *
+     */
     jitter: () => 0,
     ...over,
   };
 }
 
-/** Alias table entry matching the fixture card, so a canonical id resolves. */
+/**
+ * Alias table entry matching the fixture card, so a canonical id resolves.
+ * @param over
+ * @param options
+ */
 async function withResolvableCard(over: Partial<ICardDetailDeps> = {}, options: Partial<ICardDetailOptions> = {}) {
   // Derive the observed fingerprint the way the loop does, by letting it run
   // once with an empty table and reading which rows it left untouched — instead
@@ -89,7 +117,7 @@ describe('enrichCardDetail — never subtracts from a scrape', () => {
     expect(out).toHaveLength(3);
     // Recorded rather than skipped silently, so "never asked" stays
     // distinguishable from "asked and learned nothing".
-    expect(out.every((r: Record<string, unknown>) => (r as Record<string, unknown>)['__detailOutcome'] !== undefined)).toBe(true);
+    expect(out.every((r: Record<string, unknown>) => (r).__detailOutcome !== undefined)).toBe(true);
   });
 
   it('returns every row when the card cannot be resolved to a canonical id', async () => {
@@ -98,7 +126,10 @@ describe('enrichCardDetail — never subtracts from a scrape', () => {
   });
 
   it('returns every row when every request fails', async () => {
-    const deps = await withResolvableCard({ post: async () => fail(ScraperErrorTypes.Generic, 'down') });
+    const deps = await withResolvableCard({ /**
+     *
+     */
+    post: async () => fail(ScraperErrorTypes.Generic, 'down') });
     const input = rows(3);
     const out = await enrichCardDetail(input, deps);
     expect(out).toHaveLength(3);
@@ -108,8 +139,8 @@ describe('enrichCardDetail — never subtracts from a scrape', () => {
     const deps = await withResolvableCard();
     const input = rows(3);
     const out = await enrichCardDetail(input, deps);
-    expect(out.map((r: Record<string, unknown>) => (r as Record<string, unknown>)['seqVoucherNumber'])).toEqual(['1000', '1001', '1002']);
-    expect(out.every((r: Record<string, unknown>) => (r as Record<string, unknown>)['merchantName'] === 'M')).toBe(true);
+    expect(out.map((r: Record<string, unknown>) => (r).seqVoucherNumber)).toEqual(['1000', '1001', '1002']);
+    expect(out.every((r: Record<string, unknown>) => (r).merchantName === 'M')).toBe(true);
   });
 });
 
@@ -117,7 +148,10 @@ describe('enrichCardDetail — spending and stopping', () => {
   it('stops issuing requests once the row limit is reached, keeping later rows', async () => {
     let calls = 0;
     const deps = await withResolvableCard(
-      { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
+      { /**
+       *
+       */
+      post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { maxRows: 2 },
     );
     const out = await enrichCardDetail(rows(5), deps);
@@ -128,6 +162,9 @@ describe('enrichCardDetail — spending and stopping', () => {
   it('abandons the pass on an expired session rather than spending the rest of the budget', async () => {
     let calls = 0;
     const deps = await withResolvableCard({
+      /**
+       *
+       */
       post: async () => {
         calls++;
         return succeed({
@@ -144,6 +181,9 @@ describe('enrichCardDetail — spending and stopping', () => {
   it('abandons the pass when the response shape is no longer understood', async () => {
     let calls = 0;
     const deps = await withResolvableCard({
+      /**
+       *
+       */
       post: async () => { calls++; return succeed({ http: { status: 200, contentType: 'application/json', redirected: false, sameOrigin: true }, envelope: { unexpected: true } }); },
     });
     await enrichCardDetail(rows(4), deps);
@@ -155,7 +195,10 @@ describe('enrichCardDetail — spending and stopping', () => {
     const { createHmac } = await import('node:crypto');
     const rowFp = createHmac('sha256', HMAC_KEY).update(['card-1', 'voucher', '1000'].join('')).digest('hex');
     const deps = await withResolvableCard(
-      { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
+      { /**
+       *
+       */
+      post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { existingFingerprints: [rowFp] },
     );
     const out = await enrichCardDetail(rows(2), deps);
@@ -168,7 +211,10 @@ describe('enrichCardDetail — spending and stopping', () => {
     const { createHmac } = await import('node:crypto');
     const rowFp = createHmac('sha256', HMAC_KEY).update(['card-1', 'voucher', '1000'].join('')).digest('hex');
     const deps = await withResolvableCard(
-      { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
+      { /**
+       *
+       */
+      post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { existingFingerprints: [rowFp], backfillEnabled: true },
     );
     await enrichCardDetail(rows(2), deps);
@@ -180,7 +226,10 @@ describe('enrichCardDetail — spending and stopping', () => {
     const { createHmac } = await import('node:crypto');
     const rowFp = createHmac('sha256', HMAC_KEY).update(['card-1', 'voucher', '1000'].join('')).digest('hex');
     const deps = await withResolvableCard(
-      { post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
+      { /**
+       *
+       */
+      post: async () => { calls++; return okResponse({ businessName: 'M', branchDescription: 'C' }); } },
       { blockedFingerprints: [rowFp], backfillEnabled: true },
     );
     await enrichCardDetail(rows(2), deps);
@@ -195,7 +244,10 @@ describe('enrichCardDetail — spending and stopping', () => {
       .digest('hex');
     let calls = 0;
     const deps = makeDeps(
-      { post: async () => { calls++; return okResponse({}); } },
+      { /**
+       *
+       */
+      post: async () => { calls++; return okResponse({}); } },
       {
         cardAliases: [
           { observedAccountFingerprint: observed, canonicalCardId: 'card-1' },

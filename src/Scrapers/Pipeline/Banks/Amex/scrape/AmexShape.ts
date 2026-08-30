@@ -12,6 +12,7 @@
  * to hold the file-size cap.
  */
 
+import { buildDetailEnrichHook } from '../../../Phases/ApiDirectScrape/DigitalV3/TransactionDetailEnrichHook.js';
 import type {
   HeaderMap,
   IApiDirectScrapeShape,
@@ -26,7 +27,6 @@ import {
   noVars,
   primeUrl,
 } from './AmexShapeHelpers.js';
-import { buildDetailEnrichHook } from '../../DigitalV3/TransactionDetailEnrichHook.js';
 import { AMEX_API } from './AmexShapeHelpers.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './AmexShapeTxns.js';
 

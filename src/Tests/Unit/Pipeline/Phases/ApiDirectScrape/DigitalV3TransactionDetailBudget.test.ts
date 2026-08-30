@@ -10,7 +10,7 @@ import {
   type IDetailBudgetLimits,
   nextDetailRequest,
   retryFits,
-} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/TransactionDetailBudget.js';
+} from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailBudget.js';
 
 const LIMITS: IDetailBudgetLimits = {
   maxRows: 10,

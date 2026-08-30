@@ -313,9 +313,9 @@ function buildMappedTxn(input: IBuildTxnInput): ITransaction {
  * @returns The provenance bundle, or undefined when the shape attached none.
  */
 function resolveRowProvenance(raw: ApiRecord): Record<string, unknown> | undefined {
-  const provenance = raw?.['__rowProvenance'];
+  const provenance = raw?.__rowProvenance;
   if (provenance === undefined) return undefined;
-  return { ...(provenance as Record<string, unknown>), detailOutcome: raw?.['__detailOutcome'] };
+  return { ...(provenance as Record<string, unknown>), detailOutcome: raw?.__detailOutcome };
 }
 
 /**

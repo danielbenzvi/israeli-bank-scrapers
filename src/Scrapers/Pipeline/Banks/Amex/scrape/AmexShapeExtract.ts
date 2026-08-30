@@ -143,9 +143,9 @@ function withProvenance(raw: AmexTxn, rowClass: AmexRowClass): AmexRowWithProven
     __rowProvenance: {
       rowClass,
       ...(amountField === undefined ? {} : { amountField, rawAmount: raw[amountField] }),
-      dealSumType: raw['dealSumType'],
-      rawStatus: raw['status'],
-      rawDirection: raw['creditDebit'] ?? raw['direction'] ?? raw['debitCreditIndicator'],
+      dealSumType: raw.dealSumType,
+      rawStatus: raw.status,
+      rawDirection: raw.creditDebit ?? raw.direction ?? raw.debitCreditIndicator,
     },
   };
 }

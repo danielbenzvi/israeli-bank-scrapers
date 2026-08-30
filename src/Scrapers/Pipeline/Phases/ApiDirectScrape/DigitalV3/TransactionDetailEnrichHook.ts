@@ -6,16 +6,23 @@
  * and the pacing jitter. Kept out of each bank's Shape.ts to hold the file-size
  * cap, and out of TransactionDetailEnrich.ts so that file stays free of
  * pipeline types and remains testable without any of them.
+ *
+ * <p>Lives under `Phases/ApiDirectScrape/**` rather than in either bank,
+ * because Amex and Isracard are two brands on one issuer's DigitalV3 backbone
+ * and both need this identical loop. That is the same shape as the FIBI group,
+ * and it takes the same answer: brands sharing a wire contract share it
+ * through a neutral module here, never by one bank importing its sibling. The
+ * `BankSiblingIndependence` gate enforces that direction.
  */
 
-import type { IEnrichRowsContext } from '../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
-import type { IApiMediator } from '../../Mediator/Api/ApiMediator.types.js';
-import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
-import type { Procedure } from '../../Types/Procedure.js';
-import { fail } from '../../Types/Procedure.js';
-import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
+import { ScraperErrorTypes } from '../../../../Base/ErrorTypes.js';
+import type { IApiMediator } from '../../../Mediator/Api/ApiMediator.types.js';
+import { literalUrl } from '../../../Registry/WK/UrlsWK.js';
+import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
+import type { Procedure } from '../../../Types/Procedure.js';
+import { fail } from '../../../Types/Procedure.js';
+import type { IEnrichRowsContext } from '../IApiDirectScrapeShape.js';
 import { enrichCardDetail } from './TransactionDetailEnrich.js';
-import { literalUrl } from '../../Registry/WK/UrlsWK.js';
 
 /** A card as both DigitalV3 banks describe it — the shapes are identical. */
 export interface IDigitalV3Card {
@@ -52,6 +59,7 @@ const DETAIL_HEADERS: Record<string, string> = {
  * spending its budget against a session that is already gone.
  *
  * @param bus - This scrape's API mediator.
+ * @param apiHost
  * @returns A POST callable for the detail loop.
  */
 function bindDetailPost(
@@ -81,6 +89,7 @@ function bindDetailPost(
  *
  * @param rows - Extracted transaction rows for this page.
  * @param context - Account, action context and mediator from the driver.
+ * @param apiHost
  * @returns The same rows, some carrying a detail outcome.
  */
 export function buildDetailEnrichHook(
@@ -88,16 +97,26 @@ export function buildDetailEnrichHook(
 ): (rows: readonly object[], context: IEnrichRowsContext<IDigitalV3Card>) => Promise<readonly object[]> {
   return async (rows, context) => {
     const options = context.ctx.options.cardDetail;
-    if (options === undefined || !options.enabled) return rows;
+    if (!options?.enabled) return rows;
 
     return enrichCardDetail(rows as readonly Record<string, unknown>[], {
       post: bindDetailPost(context.bus, apiHost),
       options,
       account: { cardSuffix: context.acct.cardSuffix, companyCode: context.acct.companyCode },
+      /**
+       *
+       */
       now: () => Date.now(),
+      /**
+       *
+       * @param ms
+       */
       sleep: async (ms): Promise<void> => {
         await new Promise((resolve): NodeJS.Timeout => setTimeout(resolve, ms));
       },
+      /**
+       *
+       */
       jitter: () => Math.random(),
     });
   };

@@ -101,7 +101,7 @@ async function doPostFetch(args: IPostEvaluateArgs): Promise<PageFetchTuple> {
   // captured value gets the API to 200.
   const headers: Record<string, string> = { ...args.innerExtraHeaders };
   if (args.innerFirstParty === true) {
-    headers['TraceIdentifier'] = globalThis.crypto.randomUUID();
+    headers.TraceIdentifier = globalThis.crypto.randomUUID();
     const hasCorrelation = document.cookie.split(';').some((part): boolean => part.trim().startsWith('bckey='));
     if (!hasCorrelation) {
       document.cookie = `bckey=${globalThis.crypto.randomUUID()}; Max-Age=1800; Path=/; SameSite=Lax; Secure`;
@@ -321,11 +321,17 @@ export async function fetchPostWithinPageWithMetadata(
   const [text, status, contentType, redirected, finalUrl] = await runPostEvaluate(page, postArgs);
   logApiCall(`POST(page) ${redactUrlFull(url).slice(-100)}`, status, Date.now() - startMs);
   logResponseIssues(status, text, url);
+  // The shared `PageFetchTuple` marks the last three slots optional, because
+  // other in-page evaluators report only body and status. `doPostFetch` always
+  // fills all five, so these defaults describe an evaluator that reported
+  // nothing rather than a response that was actually plain and same-origin: an
+  // absent content-type is not JSON and so fails the parse gate anyway, and an
+  // unreported redirect means the response came from the URL we asked for.
   const http: IResponseMetadata = {
     status,
-    contentType,
-    redirected,
-    sameOrigin: new URL(finalUrl).origin === new URL(url).origin,
+    contentType: contentType ?? '',
+    redirected: redirected ?? false,
+    sameOrigin: new URL(finalUrl ?? url).origin === new URL(url).origin,
   };
   // 204 is a successful empty response, and servers routinely omit a
   // content-type on it. Answered before the JSON gate so "succeeded with no

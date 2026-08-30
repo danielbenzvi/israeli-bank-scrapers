@@ -11,11 +11,15 @@
  */
 
 import {
-  DIGITALV3_DETAIL_SCHEMA_VERSION,
   classifyDetailTransport,
+  DIGITALV3_DETAIL_SCHEMA_VERSION,
   interpretDetailEnvelope,
-} from '../../../../Scrapers/Pipeline/Banks/DigitalV3/TransactionDetailInterpret.js';
+} from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailInterpret.js';
 
+/**
+ *
+ * @param data
+ */
 const envelope = (data: Record<string, unknown>) => ({ isSuccess: true, data });
 
 describe('interpretDetailEnvelope', () => {

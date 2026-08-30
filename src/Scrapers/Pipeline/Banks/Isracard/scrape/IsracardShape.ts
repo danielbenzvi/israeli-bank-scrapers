@@ -13,6 +13,7 @@
  * IsracardShapeExtract.ts to hold the file-size cap.
  */
 
+import { buildDetailEnrichHook } from '../../../Phases/ApiDirectScrape/DigitalV3/TransactionDetailEnrichHook.js';
 import type {
   HeaderMap,
   IApiDirectScrapeShape,
@@ -27,7 +28,6 @@ import {
   noVars,
   primeUrl,
 } from './IsracardShapeHelpers.js';
-import { buildDetailEnrichHook } from '../../DigitalV3/TransactionDetailEnrichHook.js';
 import { ISRACARD_API } from './IsracardShapeHelpers.js';
 import { txnsExtractPage, txnsUrl, txnsVars } from './IsracardShapeTxns.js';
 /**

@@ -22,6 +22,17 @@ interface ICard {
   readonly companyCode: string;
 }
 
+/**
+ * A merged row: the provider's own fields, plus provenance under a reserved
+ * key on the banks that attach it.
+ *
+ * Optional because only Amex does. Provenance is attached while merging
+ * response containers, and Amex is the bank whose containers disagree on which
+ * key carries the amount; Isracard's do not, so it attaches none and the
+ * mapper is written to cope (`resolveRowProvenance`).
+ */
+type IMergedRow = object & { readonly __rowProvenance?: { readonly rowClass: string } };
+
 interface IDigitalV3Mod {
   extractCards(a: IExtractAccountsArgs): readonly ICard[];
   accountNumberOf(c: ICard): string;
@@ -29,7 +40,7 @@ interface IDigitalV3Mod {
   customerUrl(): string;
   primeUrl(): string;
   noVars(): object;
-  mergeRows(body: object): readonly object[];
+  mergeRows(body: object): readonly IMergedRow[];
 }
 
 interface IBank {
@@ -45,7 +56,7 @@ interface IBank {
  * @param merge - The bank's transactions row-merge function.
  * @returns Uniform DigitalV3 module.
  */
-function asMod(h: object, merge: (body: object) => readonly object[]): IDigitalV3Mod {
+function asMod(h: object, merge: (body: object) => readonly IMergedRow[]): IDigitalV3Mod {
   return Object.assign({}, h, { mergeRows: merge }) as unknown as IDigitalV3Mod;
 }
 
@@ -170,7 +181,11 @@ describe.each(BANKS)('$name DigitalV3 shape', bank => {
       },
     };
     const merged = bank.mod.mergeRows(body);
-    expect(merged).toEqual([{ a: 1 }, { v: 2 }, { o: 3 }]);
+    // Every provider field survives untouched; the only addition is provenance
+    // under a reserved key, which records which container each row came from
+    // — a distinction the concatenation would otherwise destroy.
+    const withoutProvenance = merged.map(({ __rowProvenance: _drop, ...rest }): object => rest);
+    expect(withoutProvenance).toEqual([{ a: 1 }, { v: 2 }, { o: 3 }]);
   });
 
   it('mergeRows flattens several per-currency-date groups', () => {

@@ -12,8 +12,17 @@ import {
   fetchPostWithinPageWithMetadata,
   type IFetchPostOptions,
 } from '../../../../Scrapers/Pipeline/Mediator/Network/Fetch/PageFetchPost.js';
+import { NETWORK_FETCH_PAGE_TIMEOUT_MS } from '../../../../Scrapers/Pipeline/Mediator/Network/FetchConfig.js';
 
-/** Stands in for a Playwright page: runs the serialised fn against a fake fetch. */
+/**
+ * Stands in for a Playwright page: runs the serialised fn against a fake fetch.
+ * @param response
+ * @param response.body
+ * @param response.status
+ * @param response.contentType
+ * @param response.redirected
+ * @param response.finalUrl
+ */
 function pageReturning(response: {
   body?: string;
   status?: number;
@@ -29,7 +38,13 @@ function pageReturning(response: {
     finalUrl = 'https://provider.example/api',
   } = response;
   return {
-    evaluate: async (_fn: unknown, args: { innerTimeoutMs?: number }) => {
+    /**
+     *
+     * @param _fn
+     * @param args
+     * @param args.timeoutMs
+     */
+    evaluate: async (_fn: unknown, args: { timeoutMs?: number }) => {
       lastArgs = args;
       if (status === 204) return ['', 204, contentType, redirected, finalUrl] as const;
       return [body, status, contentType, redirected, finalUrl] as const;
@@ -37,7 +52,7 @@ function pageReturning(response: {
   } as never;
 }
 
-let lastArgs: { innerTimeoutMs?: number } | undefined;
+let lastArgs: { timeoutMs?: number } | undefined;
 
 const OPTS: IFetchPostOptions = { data: { q: 1 } };
 const URL_UNDER_TEST = 'https://provider.example/api';
@@ -121,19 +136,33 @@ describe('fetchPostWithinPageWithMetadata', () => {
     expect(result.http.sameOrigin).toBe(false);
   });
 
-  it('passes the caller timeout through to the in-page fetch', async () => {
+  it('narrows the in-page deadline to the caller budget', async () => {
     await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, {
       ...OPTS,
       timeoutMs: 15_000,
     });
-    expect(lastArgs?.innerTimeoutMs).toBe(15_000);
+    expect(lastArgs?.timeoutMs).toBe(15_000);
   });
 
-  it('omits the timeout entirely when the caller sets none', async () => {
-    // Not "sends 0": the evaluate-args object must stay byte-identical to what
-    // callers got before this option existed, which the library's own
-    // deep-equality test on that object enforces.
+  it('falls back to the library deadline when the caller sets none', async () => {
     await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, OPTS);
-    expect(lastArgs?.innerTimeoutMs).toBeUndefined();
+    expect(lastArgs?.timeoutMs).toBe(NETWORK_FETCH_PAGE_TIMEOUT_MS);
+  });
+
+  it('clamps a caller budget larger than the library deadline', async () => {
+    // The option may only NARROW the deadline. Honouring a larger value would
+    // let one caller lift the ceiling every other request is held to, so a
+    // stalled provider could hold the scrape past the point the session dies —
+    // the exact failure the library-wide deadline exists to bound.
+    await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, {
+      ...OPTS,
+      timeoutMs: NETWORK_FETCH_PAGE_TIMEOUT_MS * 10,
+    });
+    expect(lastArgs?.timeoutMs).toBe(NETWORK_FETCH_PAGE_TIMEOUT_MS);
+  });
+
+  it('ignores a non-positive caller budget', async () => {
+    await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, { ...OPTS, timeoutMs: 0 });
+    expect(lastArgs?.timeoutMs).toBe(NETWORK_FETCH_PAGE_TIMEOUT_MS);
   });
 });
