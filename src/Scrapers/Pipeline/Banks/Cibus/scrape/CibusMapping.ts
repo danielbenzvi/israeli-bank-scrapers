@@ -13,8 +13,6 @@
  * reported through `balance`.
  */
 
-import moment from 'moment';
-
 import type { ITransaction, ITransactionsAccount } from '../../../../../Transactions.js';
 import { TransactionStatuses, TransactionTypes } from '../../../../../Transactions.js';
 import type { ScraperOptions } from '../../../../Base/Interface.js';
@@ -70,12 +68,33 @@ export interface ICibusBudgetResponse {
 }
 
 /**
+ * True when the two fields are inside the calendar's own bounds.
+ *
+ * A range check rather than a full parse, and deliberately: it catches a
+ * provider that switched to MM/DD on any day past the 12th, which the regex
+ * alone cannot see.
+ * @param day - The first field of the provider's date.
+ * @param month - The second field of the provider's date.
+ * @returns True when both fields are in range.
+ */
+function isCalendarRange(day: string, month: string): boolean {
+  const isMonthValid = Number(month) >= 1 && Number(month) <= 12;
+  const isDayValid = Number(day) >= 1 && Number(day) <= 31;
+  return isMonthValid && isDayValid;
+}
+
+/**
  * Convert the provider's `DD/MM/YYYY` into the ISO date `ITransaction.date`
  * declares.
  *
  * Parsed by explicit field position, never by `new Date(...)`: that reads
  * `05/08/2026` as a US MM/DD and returns the wrong calendar day for roughly
  * half of any real feed — silently, since the result is still a valid date.
+ *
+ * The fields are RE-EMITTED, never round-tripped through a date object. A
+ * `moment(...).toISOString()` would resolve the day in the run's local zone and
+ * shift it back an hour or two into the previous UTC day — moving every date
+ * this scraper reports, everywhere east of Greenwich, for no reason.
  * Throws on anything unrecognised, because a provider that changed its date
  * format is a real breakage and a row carrying a guessed date is worse than a
  * scrape that fails and says so.
@@ -87,10 +106,10 @@ export function toIsoDate(raw: string): string {
   const match = PROVIDER_DATE_RE.exec(value);
   if (!match) throw new ScraperError(`Cibus: unrecognised date format '${value}'`);
   const [, day, month, year] = match;
-  const iso = `${year}-${month}-${day}`;
-  const parsed = moment(iso, 'YYYY-MM-DD', true);
-  if (!parsed.isValid()) throw new ScraperError(`Cibus: date out of calendar range '${value}'`);
-  return parsed.toISOString();
+  if (!isCalendarRange(day, month)) {
+    throw new ScraperError(`Cibus: date out of calendar range '${value}'`);
+  }
+  return `${year}-${month}-${day}`;
 }
 
 /** How the provider marks a row that should not count toward spend. */
