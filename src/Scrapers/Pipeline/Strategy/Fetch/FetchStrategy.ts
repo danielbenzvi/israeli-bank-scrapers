@@ -3,6 +3,7 @@
  * Returns Procedure<T> (never null/undefined).
  */
 
+import type { IPostWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPostMetadata.js';
 import type { Procedure } from '../../Types/Procedure.js';
 
 /**
@@ -22,6 +23,24 @@ interface IFetchOpts {
    * about cookies (the non-Pepper default).
    */
   readonly onSetCookie?: OnSetCookie;
+  /**
+   * Narrow this request's deadline to this many milliseconds.
+   *
+   * Only ever a NARROWING of the strategy's own bound: absent or non-positive
+   * keeps that bound, and a larger value is clamped back down to it. For a
+   * caller issuing many requests under one wall-clock ceiling that must know
+   * what each one may cost.
+   */
+  readonly timeoutMs?: number;
+  /**
+   * Send the request the way the site's own SPA would: a per-request trace
+   * identifier and the client-correlation cookie it sets on first load.
+   *
+   * Some endpoints answer a bare replayed POST with a challenge or a redirect
+   * even on a valid session, because the request does not look like it came
+   * from their own front end.
+   */
+  readonly firstPartyContract?: boolean;
 }
 
 /** Default fetch options — no extra headers. */
@@ -37,7 +56,25 @@ interface IFetchStrategy {
 
   /** GET with optional extra headers. */
   fetchGet<T>(url: string, opts: IFetchOpts): Promise<Procedure<T>>;
+
+  /**
+   * POST returning transport metadata alongside the body.
+   *
+   * Optional because only an in-page strategy can observe redirects, the final
+   * URL and the content type — a caller must therefore handle its absence
+   * rather than assume it. Present, it lets a caller tell a challenge or an
+   * expired session (a 200 carrying HTML, or a bounce to a login origin) apart
+   * from a genuinely empty result, which `fetchPost` collapses to the same
+   * value.
+   */
+  fetchPostWithMetadata?(
+    url: string,
+    data: PostData,
+    opts: IFetchOpts,
+  ): Promise<Procedure<IPostWithMetadata>>;
 }
 
 export type { IFetchOpts, IFetchStrategy, OnSetCookie, PostData };
 export { DEFAULT_FETCH_OPTS };
+
+export { type IPostWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPostMetadata.js';

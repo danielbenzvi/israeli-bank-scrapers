@@ -4,13 +4,15 @@
  */
 
 import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
-import type { PostData } from '../../Strategy/Fetch/FetchStrategy.js';
+import type { IPostWithMetadata, PostData } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, isOk, succeed } from '../../Types/Procedure.js';
 import type {
   IFireGetArgs,
   IFirePostArgs,
   IFireQueryArgs,
+} from './ApiMediator.transport.types.js';
+import type {
   IGraphQLEnvelope,
   IGraphQLError,
 } from './ApiMediator.types.js';
@@ -172,11 +174,63 @@ function unwrapGraphql<T>(envelope: IGraphQLEnvelope<T>, operation: string): Pro
  * @returns Typed Procedure from the transport.
  */
 async function firePost<T>(args: IFirePostArgs): Promise<Procedure<T>> {
+  const request = buildPostRequest(args);
+  return args.deps.fetchStrategy.fetchPost<T>(request.url, request.payload, request.opts);
+}
+
+/** Reported when a strategy that cannot observe transport metadata is asked for it. */
+const NO_METADATA_SUPPORT = 'the configured fetch strategy cannot return response metadata';
+
+/** One POST, resolved down to what a fetch strategy actually takes. */
+interface IPostRequest {
+  readonly url: string;
+  readonly payload: PostData;
+  readonly opts: {
+    extraHeaders: Record<string, string>;
+    onSetCookie?: (setCookies: readonly string[]) => number;
+    timeoutMs?: number;
+    firstPartyContract?: boolean;
+  };
+}
+
+/**
+ * Resolve POST args into a strategy call — URL with query, body, fetch options.
+ *
+ * Shared by both POST variants so they cannot drift: the metadata variant
+ * differs only in which strategy method it hands the result to, and a second
+ * copy of this would be free to disagree about headers or the deadline.
+ * @param args - Bundled firePost arguments.
+ * @returns The URL, payload and options to hand a fetch strategy.
+ */
+function buildPostRequest(args: IFirePostArgs): IPostRequest {
   const headers = mergeHeaders(args.rawAuth, args.extraHeaders);
-  const payload = toPostData(args.body);
-  const finalUrl = appendQuery(args.url, args.query);
-  const fetchOpts = { extraHeaders: headers, onSetCookie: args.onSetCookie };
-  return args.deps.fetchStrategy.fetchPost<T>(finalUrl, payload, fetchOpts);
+  const opts = {
+    extraHeaders: headers,
+    onSetCookie: args.onSetCookie,
+    timeoutMs: args.timeoutMs,
+    firstPartyContract: args.firstPartyContract,
+  };
+  return { url: appendQuery(args.url, args.query), payload: toPostData(args.body), opts };
+}
+
+/**
+ * POST returning transport metadata alongside the body.
+ *
+ * Fails rather than silently degrading when the configured strategy cannot
+ * provide metadata: a caller asks for this precisely because it needs to tell
+ * a challenge apart from an empty result, and quietly answering without the
+ * metadata would defeat the reason it asked.
+ *
+ * @param args - Bundled firePost arguments.
+ * @returns Procedure carrying transport metadata plus the parsed body.
+ */
+async function firePostWithMetadata(args: IFirePostArgs): Promise<Procedure<IPostWithMetadata>> {
+  const strategy = args.deps.fetchStrategy;
+  if (strategy.fetchPostWithMetadata === undefined) {
+    return fail(ScraperErrorTypes.Generic, NO_METADATA_SUPPORT);
+  }
+  const request = buildPostRequest(args);
+  return strategy.fetchPostWithMetadata(request.url, request.payload, request.opts);
 }
 
 /**
@@ -213,4 +267,13 @@ async function fireQuery<T>(args: IFireQueryArgs): Promise<Procedure<T>> {
   return unwrapGraphql<T>(envelopeProc.value, operation);
 }
 
-export { appendQuery, buildHeaders, fireGet, firePost, fireQuery, mergeHeaders, NO_EXTRA_HEADERS };
+export {
+  appendQuery,
+  buildHeaders,
+  fireGet,
+  firePost,
+  firePostWithMetadata,
+  fireQuery,
+  mergeHeaders,
+  NO_EXTRA_HEADERS,
+};

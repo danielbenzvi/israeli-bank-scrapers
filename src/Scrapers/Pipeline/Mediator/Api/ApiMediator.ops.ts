@@ -6,17 +6,26 @@
 import { resolveWkQuery } from '../../Registry/WK/QueriesWK.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
 import { resolveWkUrl } from '../../Registry/WK/UrlsWK.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { isOk } from '../../Types/Procedure.js';
 import { buildHmacHeaders } from './ApiMediator.hmacHeaders.js';
 import { retryOn401Op } from './ApiMediator.retry.js';
-import { fireGet, firePost, fireQuery, NO_EXTRA_HEADERS } from './ApiMediator.transport.js';
+import {
+  fireGet,
+  firePost,
+  firePostWithMetadata,
+  fireQuery,
+  NO_EXTRA_HEADERS,
+} from './ApiMediator.transport.js';
+import type {
+  IFirePostArgs,
+  IFireQueryArgs,
+} from './ApiMediator.transport.types.js';
 import type {
   IApiCallContext,
   IApiPostOpArgs,
   IApiQueryOpArgs,
-  IFirePostArgs,
-  IFireQueryArgs,
 } from './ApiMediator.types.js';
 
 /**
@@ -24,18 +33,27 @@ import type {
  * @param args - apiPost op args.
  * @returns Optional extras subset.
  */
-function buildFirePostExtras(
-  args: IApiPostOpArgs,
-): Pick<IFirePostArgs, 'extraHeaders' | 'query' | 'onSetCookie'> {
+function buildFirePostExtras(args: IApiPostOpArgs): FirePostExtras {
   return {
     extraHeaders: args.opts?.extraHeaders ?? NO_EXTRA_HEADERS,
     query: args.opts?.query ?? NO_EXTRA_HEADERS,
     onSetCookie: args.opts?.onSetCookie,
+    timeoutMs: args.opts?.timeoutMs,
+    firstPartyContract: args.opts?.firstPartyContract,
   };
 }
 
-/** Optional-extras subset merged into firePost args. */
-type FirePostExtras = Pick<IFirePostArgs, 'extraHeaders' | 'query' | 'onSetCookie'>;
+/**
+ * Optional-extras subset merged into firePost args.
+ *
+ * Carries the per-request deadline and first-party contract alongside the
+ * headers, so a caller that needs either does not have to reach past this
+ * bundle to the transport.
+ */
+type FirePostExtras = Pick<
+  IFirePostArgs,
+  'extraHeaders' | 'query' | 'onSetCookie' | 'timeoutMs' | 'firstPartyContract'
+>;
 
 /**
  * Merge the per-request HMAC signature headers into the POST extras.
@@ -87,8 +105,40 @@ function makeApiPostFireOnce<T>(
 }
 
 /**
- * POST with auth-header injection, WK URL resolution, optional
- * query params and extraHeaders. Retries once on a 401.
+ * Build the per-attempt fireOnce for `apiPostWithMetadata`.
+ * @param args - apiPost op args.
+ * @param urlValue - Resolved POST URL.
+ * @returns A thunk performing one metadata-preserving POST attempt.
+ */
+function makeApiPostWithMetadataFireOnce(
+  args: IApiPostOpArgs,
+  urlValue: string,
+): () => Promise<Procedure<IPostWithMetadata>> {
+  return async (): Promise<Procedure<IPostWithMetadata>> => {
+    const firePostArgs = buildFirePostArgs(args, urlValue);
+    return firePostWithMetadata(firePostArgs);
+  };
+}
+
+/**
+ * Execute apiPostWithMetadata after URL resolution has succeeded.
+ *
+ * A sibling of {@link apiPostOp} rather than an option on it: the two differ in
+ * return type, and collapsing them would put the metadata behind a cast. The
+ * retry-on-401 wrapper is the same — an expired token is a transport concern,
+ * refreshed identically whether or not the caller wanted metadata back.
+ * @param args - apiPost op args.
+ * @returns Procedure carrying transport metadata plus the parsed body.
+ */
+async function apiPostWithMetadataOp(args: IApiPostOpArgs): Promise<Procedure<IPostWithMetadata>> {
+  const urlProc = resolveWkUrl(args.wkUrl, args.ctx.bankHint);
+  if (!isOk(urlProc)) return urlProc;
+  const fire = makeApiPostWithMetadataFireOnce(args, urlProc.value);
+  return retryOn401Op<IPostWithMetadata>({ state: args.ctx.state, fire });
+}
+
+/**
+ * Execute apiPost after URL resolution has succeeded.
  * @param args - apiPost op args.
  * @returns Procedure with typed payload.
  */
@@ -185,4 +235,4 @@ async function apiQueryOp<T>(args: IApiQueryOpArgs): Promise<Procedure<T>> {
   return retryOn401Op<T>({ state: args.ctx.state, fire });
 }
 
-export { apiGetOp, apiPostOp, apiQueryOp };
+export { apiGetOp, apiPostOp, apiPostWithMetadataOp, apiQueryOp };

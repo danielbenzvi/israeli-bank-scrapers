@@ -10,7 +10,9 @@ import {
   appendQuery,
   fireQuery,
 } from '../../../../../Scrapers/Pipeline/Mediator/Api/ApiMediator.transport.js';
-import type { IFireQueryArgs } from '../../../../../Scrapers/Pipeline/Mediator/Api/ApiMediator.types.js';
+import type {
+  IFireQueryArgs,
+} from '../../../../../Scrapers/Pipeline/Mediator/Api/ApiMediator.transport.types.js';
 import { fail, isOk, type Procedure } from '../../../../../Scrapers/Pipeline/Types/Procedure.js';
 
 /**
