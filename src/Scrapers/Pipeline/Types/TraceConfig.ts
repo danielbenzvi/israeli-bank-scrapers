@@ -125,6 +125,7 @@ function formatRunStamp(d: Date): RunStampStr {
 const KNOWN_BANK_SLUGS: readonly string[] = [
   'amex',
   'beinleumi',
+  'cibus',
   'discount',
   'hapoalim',
   'isracard',

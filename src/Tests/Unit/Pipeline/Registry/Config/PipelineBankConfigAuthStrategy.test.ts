@@ -70,7 +70,7 @@ describe('PipelineBankConfig — authStrategyKind completeness (T-REG)', () => {
     }
   });
 
-  it('T-REG-2: family counts are 5 token / 8 session-cookie / 3 api-direct', async () => {
+  it('T-REG-2: family counts are 5 token / 9 session-cookie / 3 api-direct', async () => {
     const { PIPELINE_BANK_CONFIG: bankConfigMap } =
       await import('../../../../../Scrapers/Pipeline/Registry/Config/PipelineBankConfig.js');
     const entries = Object.values(bankConfigMap);
@@ -80,7 +80,7 @@ describe('PipelineBankConfig — authStrategyKind completeness (T-REG)', () => {
       if (config.authStrategyKind === 'session-cookie') counts.sessionCookie++;
       if (config.authStrategyKind === 'api-direct') counts.apiDirect++;
     }
-    expect(counts).toEqual({ token: 5, sessionCookie: 8, apiDirect: 3 });
+    expect(counts).toEqual({ token: 5, sessionCookie: 9, apiDirect: 3 });
   });
 
   it('T-REG-3: api-direct banks are exactly OneZero, PayBox, and Pepper', async () => {

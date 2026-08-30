@@ -94,6 +94,10 @@ const PIPELINE_BANK_CONFIG: Partial<Record<CompanyTypes, IPipelineBankConfig>> =
       tokenPath: ['SessionHeader', 'SessionID'],
     },
   },
+  // The benefit allowance, not a bank balance — ACCOUNT is still the right
+  // semantics: it is a standing figure the provider reports, not a card cycle
+  // that closes. Base URL is the consumer portal, which INIT navigates to.
+  [CompanyTypes.Cibus]: defineBank('https://consumers.pluxee.co.il', ACCOUNT, SESSION_COOKIE),
   [CompanyTypes.Discount]: defineBank('https://www.discountbank.co.il', ACCOUNT, SESSION_COOKIE),
   [CompanyTypes.Hapoalim]: defineBank('https://www.bankhapoalim.co.il', ACCOUNT, SESSION_COOKIE),
   [CompanyTypes.Massad]: fibiConfig(
