@@ -3,7 +3,7 @@
  * Returns Procedure<T> (never null/undefined).
  */
 
-import type { IPostWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPost.js';
+import type { IPostWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPostMetadata.js';
 import type { Procedure } from '../../Types/Procedure.js';
 
 /**
@@ -24,8 +24,12 @@ interface IFetchOpts {
    */
   readonly onSetCookie?: OnSetCookie;
   /**
-   * Abort the request after this many milliseconds. Absent or non-positive
-   * means no timeout — the previous behaviour for every caller.
+   * Narrow this request's deadline to this many milliseconds.
+   *
+   * Only ever a NARROWING of the strategy's own bound: absent or non-positive
+   * keeps that bound, and a larger value is clamped back down to it. For a
+   * caller issuing many requests under one wall-clock ceiling that must know
+   * what each one may cost.
    */
   readonly timeoutMs?: number;
   /**
@@ -70,7 +74,7 @@ interface IFetchStrategy {
   ): Promise<Procedure<IPostWithMetadata>>;
 }
 
-export type { IFetchOpts, IFetchStrategy,  OnSetCookie, PostData };
+export type { IFetchOpts, IFetchStrategy, OnSetCookie, PostData };
 export { DEFAULT_FETCH_OPTS };
 
-export {type IPostWithMetadata} from '../../Mediator/Network/Fetch/PageFetchPost.js';
+export { type IPostWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPostMetadata.js';

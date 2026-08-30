@@ -5,7 +5,7 @@
 import type { CompanyTypes } from '../../../../Definitions.js';
 import type { WKQueryOperation } from '../../Registry/WK/QueriesWK.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
-import type { IFetchStrategy, IPostWithMetadata  } from '../../Strategy/Fetch/FetchStrategy.js';
+import type { IFetchStrategy, IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { GraphQLFetchStrategy } from '../../Strategy/Fetch/GraphQLFetchStrategy.js';
 import type { IApiQueryOpts } from '../../Types/Domain/ApiQueryOpts.js';
 import type { ITokenContext } from '../../Types/Domain/TokenContext.js';
@@ -79,36 +79,6 @@ interface IApiMediatorDeps {
   readonly bankHint: CompanyTypes;
   readonly fetchStrategy: IFetchStrategy;
   readonly graphqlStrategy: GraphQLFetchStrategy;
-}
-
-/** Args for firePost — bundled to satisfy the 3-parameter ceiling. */
-interface IFirePostArgs {
-  readonly deps: IApiMediatorDeps;
-  readonly url: string;
-  readonly body: Record<string, unknown>;
-  readonly rawAuth: string;
-  readonly extraHeaders: Record<string, string>;
-  readonly query: Record<string, string>;
-  readonly onSetCookie?: (setCookies: readonly string[]) => number;
-  readonly timeoutMs?: number;
-  readonly firstPartyContract?: boolean;
-}
-
-/** Args for fireGet — bundled so extraHeaders (HMAC) fit the 3-param ceiling. */
-interface IFireGetArgs {
-  readonly deps: IApiMediatorDeps;
-  readonly url: string;
-  readonly rawAuth: string;
-  readonly extraHeaders: Record<string, string>;
-}
-
-/** Args for fireQuery — bundled to satisfy the 3-parameter ceiling. */
-interface IFireQueryArgs {
-  readonly deps: IApiMediatorDeps;
-  readonly queryString: string;
-  readonly variables: Record<string, unknown>;
-  readonly rawAuth: string;
-  readonly extraHeaders: Record<string, string>;
 }
 
 /** Mutable mediator state isolated from the public interface. */
@@ -196,9 +166,6 @@ export type {
   IApiQueryOpArgs,
   IAuthMethods,
   ICallMethods,
-  IFireGetArgs,
-  IFirePostArgs,
-  IFireQueryArgs,
   IGraphQLEnvelope,
   IGraphQLError,
   IMediatorState,

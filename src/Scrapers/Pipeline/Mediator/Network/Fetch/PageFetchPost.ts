@@ -5,6 +5,8 @@
  * ScrapePhase.PRE ensures the page is on the correct origin.
  */
 
+import { randomUUID } from 'node:crypto';
+
 import type { Frame, Page } from 'playwright-core';
 
 import type { Nullable } from '../../../../Base/Interfaces/CallbackTypes.js';
@@ -47,39 +49,20 @@ export interface IFetchPostOptions {
   firstPartyContract?: boolean;
 }
 
-/**
- * Transport-level facts about a response, independent of its body.
- *
- * These are the signals that distinguish "the provider returned no data" from
- * "we were bounced": a WAF challenge and an expired session both commonly
- * arrive as a 200 carrying HTML, or as a redirect to a login origin. Parsed as
- * JSON, both yield `null` — the same value a genuinely empty result gives —
- * so without this a caller cannot tell an authentication failure from an empty
- * account.
- */
-export interface IResponseMetadata {
-  status: number;
-  contentType: string;
-  redirected: boolean;
-  /** False when the response came from a different origin than requested. */
-  sameOrigin: boolean;
-}
-
-/** A response returned as transport metadata plus its body, if it parsed. */
-export interface IPostWithMetadata {
-  http: IResponseMetadata;
-  /** Parsed JSON body, or null when the response was not usable JSON. */
-  envelope: unknown;
-}
-
 /** Arguments for POST requests via Playwright's API client. */
-interface IPostEvaluateArgs {
+export interface IPostEvaluateArgs {
   innerUrl: string;
   innerDataJson: string;
   innerExtraHeaders: Record<string, string>;
   timeoutMs: number;
-  /** See IFetchPostOptions.firstPartyContract. */
-  innerFirstParty?: boolean;
+  /**
+   * Candidate value for the SPA's client-correlation cookie, minted Node-side.
+   *
+   * Present only when the caller asked for the first-party contract. The cookie
+   * is planted by {@link primeFirstPartyCookie} before the POST rather than
+   * inside it, so the serialised in-page function stays exactly what it was.
+   */
+  innerCorrelationId?: string;
 }
 
 /**
@@ -99,14 +82,7 @@ async function doPostFetch(args: IPostEvaluateArgs): Promise<PageFetchTuple> {
   // live evidence: run 15-05-2026 — hardcoded `Content-Type`
   // value collided with captured `content-type`; only the
   // captured value gets the API to 200.
-  const headers: Record<string, string> = { ...args.innerExtraHeaders };
-  if (args.innerFirstParty === true) {
-    headers.TraceIdentifier = globalThis.crypto.randomUUID();
-    const hasCorrelation = document.cookie.split(';').some((part): boolean => part.trim().startsWith('bckey='));
-    if (!hasCorrelation) {
-      document.cookie = `bckey=${globalThis.crypto.randomUUID()}; Max-Age=1800; Path=/; SameSite=Lax; Secure`;
-    }
-  }
+  const headers = { ...args.innerExtraHeaders };
   const signal = AbortSignal.timeout(args.timeoutMs);
   const init = { method: 'POST', body: args.innerDataJson, credentials: 'include' as const };
   const response = await fetch(args.innerUrl, { ...init, headers, signal });
@@ -160,18 +136,78 @@ function logDoPostFetchHeaders(args: IPostEvaluateArgs): boolean {
 }
 
 /**
+ * In-page: plant the SPA's client-correlation cookie when the page has none.
+ *
+ * Serialised into the page, so it may reference only its argument and browser
+ * globals — the candidate value is minted Node-side and arrives as data.
+ * @param candidate - Cookie value to plant when none is already present.
+ * @returns True when the page already carried the cookie, false when planted.
+ */
+function doEnsureCorrelationCookie(candidate: string): boolean {
+  const parts = document.cookie.split(';');
+  const wasPresent = parts.some((part): boolean => part.trim().startsWith('bckey='));
+  if (wasPresent) return true;
+  document.cookie = `bckey=${candidate}; Max-Age=1800; Path=/; SameSite=Lax; Secure`;
+  return false;
+}
+
+/**
+ * Plant the correlation cookie, then POST.
+ *
+ * @param context - The Playwright page or frame to evaluate in.
+ * @param args - Post-evaluate args; carries the candidate cookie value.
+ * @param candidate - The cookie value to plant when the page carries none.
+ * @returns The evaluator response tuple.
+ */
+async function primeThenPost(
+  context: Page | Frame,
+  args: IPostEvaluateArgs,
+  candidate: string,
+): Promise<PageFetchTuple> {
+  await context.evaluate(doEnsureCorrelationCookie, candidate);
+  return context.evaluate(doPostFetch, args);
+}
+
+/**
+ * Start the in-page POST, giving the page the client-correlation cookie its own
+ * front end sets on first load when the caller asked for the first-party
+ * contract.
+ *
+ * The cookie is planted by its own evaluate rather than inside
+ * {@link doPostFetch}, so that function stays byte for byte what it was: an
+ * in-page conditional would have had to run on every request to serve the few
+ * that need it.
+ *
+ * Deliberately NOT `async`: a caller that wants no cookie must reach
+ * `context.evaluate` in the same turn it always did. An `await` here would cost
+ * every request a microtask before the request is even issued, which is enough
+ * to reorder it against an abort raised by the caller.
+ * @param context - The Playwright page or frame to evaluate in.
+ * @param args - Post-evaluate args.
+ * @returns The pending evaluator response tuple.
+ */
+function startPostEvaluate(
+  context: Page | Frame,
+  args: IPostEvaluateArgs,
+): Promise<PageFetchTuple> {
+  const candidate = args.innerCorrelationId;
+  if (candidate === undefined) return context.evaluate(doPostFetch, args);
+  return primeThenPost(context, args, candidate);
+}
+
+/**
  * POST request via page.evaluate — runs inside the browser context.
  * The SPA pivot in ScrapePhase.PRE ensures the page is on the correct origin.
  * @param context - The Playwright page or frame to execute the fetch in.
  * @param args - The URL, data, and extra headers.
  * @returns The evaluator response tuple.
  */
-async function runPostEvaluate(
+export async function runPostEvaluate(
   context: Page | Frame,
   args: IPostEvaluateArgs,
 ): Promise<PageFetchTuple> {
   logDoPostFetchHeaders(args);
-  const pending = context.evaluate(doPostFetch, args);
+  const pending = startPostEvaluate(context, args);
   const description = `in-page POST ${redactUrlFull(args.innerUrl)}`;
   return timeoutPromise(NETWORK_FETCH_TIMEOUT_MS, pending, description);
 }
@@ -210,6 +246,44 @@ function withJsonContentType(extraHeaders?: Record<string, string>): Record<stri
 }
 
 /**
+ * Resolve the in-page deadline for one request.
+ *
+ * A caller's budget may only NARROW the library-wide deadline: it is clamped
+ * with `Math.min`, so a request is never left unbounded and one caller cannot
+ * lift the ceiling every other request is held to.
+ * @param requested - The caller's budget in milliseconds, if it set one.
+ * @returns The deadline to enforce in the page.
+ */
+function resolvePageTimeoutMs(requested?: number): number {
+  if (requested === undefined || requested <= 0) return NETWORK_FETCH_PAGE_TIMEOUT_MS;
+  return Math.min(requested, NETWORK_FETCH_PAGE_TIMEOUT_MS);
+}
+
+/**
+ * The per-request headers the site's own front end would add.
+ *
+ * Only the trace identifier belongs in the header map; the correlation cookie
+ * is a cookie, planted separately by {@link primeFirstPartyCookie}. Minted here
+ * rather than in-page so the serialised evaluator needs no branch.
+ * @param opts - Public fetch options; read for `firstPartyContract`.
+ * @returns Headers to merge in, or an empty map when not requested.
+ */
+function firstPartyHeaders(opts: IFetchPostOptions): Record<string, string> {
+  if (opts.firstPartyContract !== true) return {};
+  return { TraceIdentifier: randomUUID() };
+}
+
+/**
+ * The correlation-cookie candidate for this request, when one is wanted.
+ * @param opts - Public fetch options; read for `firstPartyContract`.
+ * @returns A fresh candidate value, or an empty bundle when not requested.
+ */
+function firstPartyCookieArg(opts: IFetchPostOptions): { innerCorrelationId?: string } {
+  if (opts.firstPartyContract !== true) return {};
+  return { innerCorrelationId: randomUUID() };
+}
+
+/**
  * Build the post-evaluate args bundle from the public options. Headers pass
  * through {@link withJsonContentType} so every JSON POST advertises a
  * Content-Type without shadowing a captured SPA value.
@@ -217,23 +291,14 @@ function withJsonContentType(extraHeaders?: Record<string, string>): Record<stri
  * @param opts - Public fetch options.
  * @returns Args ready for runPostEvaluate.
  */
-function buildPostArgs(url: string, opts: IFetchPostOptions): IPostEvaluateArgs {
-  const innerExtraHeaders = withJsonContentType(opts.extraHeaders);
+export function buildPostArgs(url: string, opts: IFetchPostOptions): IPostEvaluateArgs {
+  const declared = withJsonContentType(opts.extraHeaders);
+  const firstParty = firstPartyHeaders(opts);
+  const innerExtraHeaders = { ...declared, ...firstParty };
   const innerDataJson = JSON.stringify(opts.data);
-  // The caller's budget only ever NARROWS the library-wide deadline: a request
-  // is never left unbounded, and a caller that sets nothing is unaffected.
-  const requested = opts.timeoutMs;
-  const timeoutMs =
-    requested !== undefined && requested > 0
-      ? Math.min(requested, NETWORK_FETCH_PAGE_TIMEOUT_MS)
-      : NETWORK_FETCH_PAGE_TIMEOUT_MS;
-  return {
-    innerUrl: url,
-    innerDataJson,
-    innerExtraHeaders,
-    timeoutMs,
-    ...(opts.firstPartyContract === true ? { innerFirstParty: true } : {}),
-  };
+  const timeoutMs = resolvePageTimeoutMs(opts.timeoutMs);
+  const cookieArg = firstPartyCookieArg(opts);
+  return { innerUrl: url, innerDataJson, innerExtraHeaders, timeoutMs, ...cookieArg };
 }
 
 /** Bundled args for {@link finalisePagePost} — keeps the sig under max-params. */
@@ -279,71 +344,4 @@ export async function fetchPostWithinPage<TResult>(
   const postArgs = buildPostArgs(url, opts);
   const response = await runPostEvaluate(page, postArgs);
   return finalisePagePost<TResult>({ response, url, startMs, opts });
-}
-
-/**
- * True when a response is worth attempting to parse as JSON.
- *
- * A redirected response is excluded even at 2xx: landing on a login or
- * challenge origin is the single most common way a scrape "succeeds" while
- * returning nothing usable, and parsing it would erase that distinction.
- *
- * @param meta - Transport metadata for the response.
- * @returns True when the body should be parsed.
- */
-function isParseableJson(meta: IResponseMetadata): boolean {
-  if (meta.redirected) return false;
-  if (meta.status < 200 || meta.status >= 300) return false;
-  return meta.contentType.toLowerCase().includes('application/json');
-}
-
-/**
- * Perform a POST inside the page and return transport metadata alongside the
- * body, instead of the body alone.
- *
- * Separate from {@link fetchPostWithinPage} rather than a flag on it, so the
- * two return types stay honest: this one never collapses a failure into
- * `null`, which is the entire reason to call it.
- *
- * @param page - The Playwright page or frame context.
- * @param url - The URL to post to.
- * @param opts - Request body, optional extra headers, timeout.
- * @returns Transport metadata plus the parsed body, or a null body when the
- *   response was not usable JSON.
- */
-export async function fetchPostWithinPageWithMetadata(
-  page: Page | Frame,
-  url: string,
-  opts: IFetchPostOptions,
-): Promise<IPostWithMetadata> {
-  const startMs = Date.now();
-  const postArgs = buildPostArgs(url, opts);
-  const [text, status, contentType, redirected, finalUrl] = await runPostEvaluate(page, postArgs);
-  logApiCall(`POST(page) ${redactUrlFull(url).slice(-100)}`, status, Date.now() - startMs);
-  logResponseIssues(status, text, url);
-  // The shared `PageFetchTuple` marks the last three slots optional, because
-  // other in-page evaluators report only body and status. `doPostFetch` always
-  // fills all five, so these defaults describe an evaluator that reported
-  // nothing rather than a response that was actually plain and same-origin: an
-  // absent content-type is not JSON and so fails the parse gate anyway, and an
-  // unreported redirect means the response came from the URL we asked for.
-  const http: IResponseMetadata = {
-    status,
-    contentType: contentType ?? '',
-    redirected: redirected ?? false,
-    sameOrigin: new URL(finalUrl ?? url).origin === new URL(url).origin,
-  };
-  // 204 is a successful empty response, and servers routinely omit a
-  // content-type on it. Answered before the JSON gate so "succeeded with no
-  // content" stays distinguishable from "could not be read" — which is the
-  // distinction this whole function exists to preserve.
-  if (status === 204) return { http, envelope: {} };
-  if (!isParseableJson(http)) return { http, envelope: null };
-  try {
-    return { http, envelope: text === '' ? {} : JSON.parse(text) };
-  } catch {
-    // A body that claimed JSON and was not is a transport-level anomaly, not a
-    // parse error to raise: the metadata already records what happened.
-    return { http, envelope: null };
-  }
 }

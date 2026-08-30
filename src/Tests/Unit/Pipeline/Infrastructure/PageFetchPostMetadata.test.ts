@@ -1,5 +1,5 @@
 /**
- * In-page POST: request timeout and response metadata.
+ * In-page POST: response metadata and the narrowable deadline.
  *
  * The property worth testing is not that metadata is returned — it is that a
  * bounced response is distinguishable from an empty one. A WAF challenge and an
@@ -8,62 +8,62 @@
  * empty account. These tests pin the cases where the body must NOT be parsed.
  */
 
-import {
-  fetchPostWithinPageWithMetadata,
-  type IFetchPostOptions,
-} from '../../../../Scrapers/Pipeline/Mediator/Network/Fetch/PageFetchPost.js';
+import { jest } from '@jest/globals';
+import type { Page } from 'playwright-core';
+
+import type { IFetchPostOptions } from '../../../../Scrapers/Pipeline/Mediator/Network/Fetch/PageFetchPost.js';
+import { fetchPostWithinPageWithMetadata } from '../../../../Scrapers/Pipeline/Mediator/Network/Fetch/PageFetchPostMetadata.js';
 import { NETWORK_FETCH_PAGE_TIMEOUT_MS } from '../../../../Scrapers/Pipeline/Mediator/Network/FetchConfig.js';
+import { createMockPage } from '../../../MockPage.js';
+
+/** The response a faked page should answer the in-page POST with. */
+interface IFakeResponse {
+  readonly body?: string;
+  readonly status?: number;
+  readonly contentType?: string;
+  readonly isRedirected?: boolean;
+  readonly finalUrl?: string;
+}
+
+/** The evaluate-args the fake page last received, for the deadline assertions. */
+let lastArgs: { timeoutMs?: number } | undefined;
 
 /**
- * Stands in for a Playwright page: runs the serialised fn against a fake fetch.
- * @param response
- * @param response.body
- * @param response.status
- * @param response.contentType
- * @param response.redirected
- * @param response.finalUrl
+ * A page whose `evaluate` answers with one fixed response tuple.
+ *
+ * Built on the shared {@link createMockPage} so the fake satisfies `Page`
+ * structurally rather than being cast through `never`.
+ * @param response - The status, body, content type and final URL to answer with.
+ * @returns A mock page the POST helper can be driven against.
  */
-function pageReturning(response: {
-  body?: string;
-  status?: number;
-  contentType?: string;
-  redirected?: boolean;
-  finalUrl?: string;
-}) {
+function pageReturning(response: IFakeResponse): Page {
   const {
     body = '{"ok":true}',
     status = 200,
     contentType = 'application/json',
-    redirected = false,
+    isRedirected = false,
     finalUrl = 'https://provider.example/api',
   } = response;
-  return {
-    /**
-     *
-     * @param _fn
-     * @param args
-     * @param args.timeoutMs
-     */
-    evaluate: async (_fn: unknown, args: { timeoutMs?: number }) => {
-      lastArgs = args;
-      if (status === 204) return ['', 204, contentType, redirected, finalUrl] as const;
-      return [body, status, contentType, redirected, finalUrl] as const;
-    },
-  } as never;
+  const text = status === 204 ? '' : body;
+  const tuple = [text, status, contentType, isRedirected, finalUrl] as const;
+  const evaluate = jest.fn((_fn: unknown, args: { timeoutMs?: number }) => {
+    lastArgs = args;
+    return Promise.resolve(tuple);
+  });
+  return createMockPage({ evaluate });
 }
-
-let lastArgs: { timeoutMs?: number } | undefined;
 
 const OPTS: IFetchPostOptions = { data: { q: 1 } };
 const URL_UNDER_TEST = 'https://provider.example/api';
 
 describe('fetchPostWithinPageWithMetadata', () => {
-  beforeEach(() => {
+  beforeEach((): void => {
     lastArgs = undefined;
   });
 
   it('parses a clean JSON response and reports the transport facts', async () => {
-    const result = await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, OPTS);
+    const page = pageReturning({});
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(result.envelope).toEqual({ ok: true });
     expect(result.http.status).toBe(200);
     expect(result.http.redirected).toBe(false);
@@ -73,11 +73,8 @@ describe('fetchPostWithinPageWithMetadata', () => {
   it('does NOT parse a redirected response, even at 200', async () => {
     // The login-page bounce. Parsing it would produce the same null a genuinely
     // empty account gives, erasing the only signal that anything went wrong.
-    const result = await fetchPostWithinPageWithMetadata(
-      pageReturning({ redirected: true, finalUrl: 'https://login.example/signin' }),
-      URL_UNDER_TEST,
-      OPTS,
-    );
+    const page = pageReturning({ isRedirected: true, finalUrl: 'https://login.example/signin' });
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(result.envelope).toBeNull();
     expect(result.http.redirected).toBe(true);
     expect(result.http.sameOrigin).toBe(false);
@@ -85,67 +82,51 @@ describe('fetchPostWithinPageWithMetadata', () => {
 
   it('does NOT parse an HTML body served with a 200', async () => {
     // The WAF-challenge shape.
-    const result = await fetchPostWithinPageWithMetadata(
-      pageReturning({ body: '<html>checking your browser</html>', contentType: 'text/html' }),
-      URL_UNDER_TEST,
-      OPTS,
-    );
+    const page = pageReturning({ body: '<html>checking</html>', contentType: 'text/html' });
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(result.envelope).toBeNull();
     expect(result.http.contentType).toBe('text/html');
   });
 
   it('reports a non-2xx status without throwing', async () => {
-    const result = await fetchPostWithinPageWithMetadata(
-      pageReturning({ status: 403, body: 'forbidden', contentType: 'text/plain' }),
-      URL_UNDER_TEST,
-      OPTS,
-    );
+    const page = pageReturning({ status: 403, body: 'forbidden', contentType: 'text/plain' });
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(result.http.status).toBe(403);
     expect(result.envelope).toBeNull();
   });
 
   it('treats an empty 204 as an empty envelope, not a failure', async () => {
-    const result = await fetchPostWithinPageWithMetadata(
-      pageReturning({ status: 204, contentType: '' }),
-      URL_UNDER_TEST,
-      OPTS,
-    );
-    expect(result.http.status).toBe(204);
     // `{}`, not null: the request succeeded and carried no content. Collapsing
     // it to null would put it in the same bucket as a WAF bounce. Asserted with
     // an absent content-type because servers routinely omit one on a 204.
+    const page = pageReturning({ status: 204, contentType: '' });
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
+    expect(result.http.status).toBe(204);
     expect(result.envelope).toEqual({});
   });
 
   it('survives a body that claims JSON and is not', async () => {
-    const result = await fetchPostWithinPageWithMetadata(
-      pageReturning({ body: 'not json at all' }),
-      URL_UNDER_TEST,
-      OPTS,
-    );
+    const page = pageReturning({ body: 'not json at all' });
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(result.envelope).toBeNull();
     expect(result.http.status).toBe(200);
   });
 
   it('flags a cross-origin response even when it was not a redirect', async () => {
-    const result = await fetchPostWithinPageWithMetadata(
-      pageReturning({ finalUrl: 'https://other.example/api' }),
-      URL_UNDER_TEST,
-      OPTS,
-    );
+    const page = pageReturning({ finalUrl: 'https://other.example/api' });
+    const result = await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(result.http.sameOrigin).toBe(false);
   });
 
   it('narrows the in-page deadline to the caller budget', async () => {
-    await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, {
-      ...OPTS,
-      timeoutMs: 15_000,
-    });
+    const page = pageReturning({});
+    await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, { ...OPTS, timeoutMs: 15_000 });
     expect(lastArgs?.timeoutMs).toBe(15_000);
   });
 
   it('falls back to the library deadline when the caller sets none', async () => {
-    await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, OPTS);
+    const page = pageReturning({});
+    await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, OPTS);
     expect(lastArgs?.timeoutMs).toBe(NETWORK_FETCH_PAGE_TIMEOUT_MS);
   });
 
@@ -154,15 +135,15 @@ describe('fetchPostWithinPageWithMetadata', () => {
     // let one caller lift the ceiling every other request is held to, so a
     // stalled provider could hold the scrape past the point the session dies —
     // the exact failure the library-wide deadline exists to bound.
-    await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, {
-      ...OPTS,
-      timeoutMs: NETWORK_FETCH_PAGE_TIMEOUT_MS * 10,
-    });
+    const page = pageReturning({});
+    const generous = NETWORK_FETCH_PAGE_TIMEOUT_MS * 10;
+    await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, { ...OPTS, timeoutMs: generous });
     expect(lastArgs?.timeoutMs).toBe(NETWORK_FETCH_PAGE_TIMEOUT_MS);
   });
 
   it('ignores a non-positive caller budget', async () => {
-    await fetchPostWithinPageWithMetadata(pageReturning({}), URL_UNDER_TEST, { ...OPTS, timeoutMs: 0 });
+    const page = pageReturning({});
+    await fetchPostWithinPageWithMetadata(page, URL_UNDER_TEST, { ...OPTS, timeoutMs: 0 });
     expect(lastArgs?.timeoutMs).toBe(NETWORK_FETCH_PAGE_TIMEOUT_MS);
   });
 });

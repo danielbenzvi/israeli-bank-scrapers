@@ -18,7 +18,7 @@ import {
   fetchGetWithinPageWithHeaders,
   fetchPostWithinPage,
 } from '../../Mediator/Network/Fetch/index.js';
-import { fetchPostWithinPageWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPost.js';
+import { fetchPostWithinPageWithMetadata } from '../../Mediator/Network/Fetch/PageFetchPostMetadata.js';
 import { TimeoutError } from '../../Mediator/Timing/TimingActions.js';
 import type { Brand } from '../../Types/Brand.js';
 import { toErrorMessage } from '../../Types/ErrorUtils.js';

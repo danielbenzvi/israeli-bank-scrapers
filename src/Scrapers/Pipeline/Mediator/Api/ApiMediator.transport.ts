@@ -11,6 +11,8 @@ import type {
   IFireGetArgs,
   IFirePostArgs,
   IFireQueryArgs,
+} from './ApiMediator.transport.types.js';
+import type {
   IGraphQLEnvelope,
   IGraphQLError,
 } from './ApiMediator.types.js';
@@ -172,16 +174,43 @@ function unwrapGraphql<T>(envelope: IGraphQLEnvelope<T>, operation: string): Pro
  * @returns Typed Procedure from the transport.
  */
 async function firePost<T>(args: IFirePostArgs): Promise<Procedure<T>> {
+  const request = buildPostRequest(args);
+  return args.deps.fetchStrategy.fetchPost<T>(request.url, request.payload, request.opts);
+}
+
+/** Reported when a strategy that cannot observe transport metadata is asked for it. */
+const NO_METADATA_SUPPORT = 'the configured fetch strategy cannot return response metadata';
+
+/** One POST, resolved down to what a fetch strategy actually takes. */
+interface IPostRequest {
+  readonly url: string;
+  readonly payload: PostData;
+  readonly opts: {
+    extraHeaders: Record<string, string>;
+    onSetCookie?: (setCookies: readonly string[]) => number;
+    timeoutMs?: number;
+    firstPartyContract?: boolean;
+  };
+}
+
+/**
+ * Resolve POST args into a strategy call — URL with query, body, fetch options.
+ *
+ * Shared by both POST variants so they cannot drift: the metadata variant
+ * differs only in which strategy method it hands the result to, and a second
+ * copy of this would be free to disagree about headers or the deadline.
+ * @param args - Bundled firePost arguments.
+ * @returns The URL, payload and options to hand a fetch strategy.
+ */
+function buildPostRequest(args: IFirePostArgs): IPostRequest {
   const headers = mergeHeaders(args.rawAuth, args.extraHeaders);
-  const payload = toPostData(args.body);
-  const finalUrl = appendQuery(args.url, args.query);
-  const fetchOpts = {
+  const opts = {
     extraHeaders: headers,
     onSetCookie: args.onSetCookie,
     timeoutMs: args.timeoutMs,
     firstPartyContract: args.firstPartyContract,
   };
-  return args.deps.fetchStrategy.fetchPost<T>(finalUrl, payload, fetchOpts);
+  return { url: appendQuery(args.url, args.query), payload: toPostData(args.body), opts };
 }
 
 /**
@@ -196,23 +225,12 @@ async function firePost<T>(args: IFirePostArgs): Promise<Procedure<T>> {
  * @returns Procedure carrying transport metadata plus the parsed body.
  */
 async function firePostWithMetadata(args: IFirePostArgs): Promise<Procedure<IPostWithMetadata>> {
-  const withMetadata = args.deps.fetchStrategy.fetchPostWithMetadata;
-  if (withMetadata === undefined) {
-    return fail(
-      ScraperErrorTypes.Generic,
-      'the configured fetch strategy cannot return response metadata',
-    );
+  const strategy = args.deps.fetchStrategy;
+  if (strategy.fetchPostWithMetadata === undefined) {
+    return fail(ScraperErrorTypes.Generic, NO_METADATA_SUPPORT);
   }
-  const headers = mergeHeaders(args.rawAuth, args.extraHeaders);
-  const payload = toPostData(args.body);
-  const finalUrl = appendQuery(args.url, args.query);
-  const fetchOpts = {
-    extraHeaders: headers,
-    onSetCookie: args.onSetCookie,
-    timeoutMs: args.timeoutMs,
-    firstPartyContract: args.firstPartyContract,
-  };
-  return withMetadata.call(args.deps.fetchStrategy, finalUrl, payload, fetchOpts);
+  const request = buildPostRequest(args);
+  return strategy.fetchPostWithMetadata(request.url, request.payload, request.opts);
 }
 
 /**
