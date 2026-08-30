@@ -35,9 +35,16 @@ import { createPreLoginPhase } from '../../Phases/PreLogin/FindLoginAreaPhase.js
 import { createTerminatePhase } from '../../Phases/Terminate/TerminatePhase.js';
 import { buildLoginPhase, buildScrapePhase, type IBuilderState } from './StepResolvers.js';
 
-/** Factory + predicate pair for a single phase slot in the chain. */
+/**
+ * Factory + predicate pair for a single phase slot in the chain.
+ *
+ * A factory may return SEVERAL phases. Only the staged login does today: a
+ * login whose later inputs do not exist until an earlier one is submitted runs
+ * as one ordinary pass per stage, and each pass is a phase. Every other slot
+ * returns exactly one, and the flattening leaves it untouched.
+ */
 interface IPhaseSlot {
-  readonly factory: (state: IBuilderState) => BasePhase;
+  readonly factory: (state: IBuilderState) => BasePhase | readonly BasePhase[];
   readonly enabled: (state: IBuilderState) => boolean;
 }
 
@@ -171,7 +178,7 @@ function makePreLogin(): BasePhase {
  * @param state - Builder state.
  * @returns LOGIN phase.
  */
-function makeLogin(state: IBuilderState): BasePhase {
+function makeLogin(state: IBuilderState): BasePhase | readonly BasePhase[] {
   return buildLoginPhase(state);
 }
 
@@ -295,16 +302,31 @@ const PHASE_CHAIN: readonly IPhaseSlot[] = [
 ];
 
 /**
+ * Normalise what a slot returned into a list.
+ * @param built - One phase, or the several a staged login expands to.
+ * @returns The phases that slot contributes.
+ */
+function toPhaseList(built: BasePhase | readonly BasePhase[]): BasePhase[] {
+  if (Array.isArray(built)) return [...(built as readonly BasePhase[])];
+  return [built as BasePhase];
+}
+
+/**
  * Assemble the ordered phase list from the validated builder state.
- * Pure composition: filter the declarative chain by predicate, map
- * each enabled slot through its factory.
  *
+ * Pure composition: filter the declarative chain by predicate, then flatten
+ * each enabled slot through its factory. The flattening exists for the staged
+ * login, which contributes one pass per stage; every other slot contributes
+ * exactly one phase and is unaffected.
  * @param state - Builder state.
  * @returns Ordered phase array.
  */
 function assemblePhases(state: IBuilderState): BasePhase[] {
   const enabled = PHASE_CHAIN.filter((slot): boolean => slot.enabled(state));
-  return enabled.map((slot): BasePhase => slot.factory(state));
+  return enabled.flatMap((slot): BasePhase[] => {
+    const built = slot.factory(state);
+    return toPhaseList(built);
+  });
 }
 
 export type { IBuilderState, LoginFn, StepExecFn } from './StepResolvers.js';

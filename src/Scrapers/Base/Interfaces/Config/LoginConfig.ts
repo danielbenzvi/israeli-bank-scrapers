@@ -48,19 +48,22 @@ export interface ILoginSetup {
  */
 export interface ILoginStage {
   /**
-   * Credential keys expected to be resolvable at this stage.
+   * Credential keys this stage's form carries.
    *
-   * The resolution check is scoped to these rather than to every field the bank
-   * declares — demanding a later stage's input be present in the first is
-   * exactly the failure this contract exists to describe.
+   * The stage's own field list is the bank's `fields` narrowed to these, so a
+   * later stage's input is never looked for in an earlier stage's page — which
+   * is the failure this contract exists to describe.
    */
   readonly credentialKeys: readonly string[];
   /**
-   * Control that advances to the next stage.
+   * Control that submits THIS stage.
    *
-   * Absent on the final stage, which uses the config's own `submit`.
+   * A non-final stage's control advances to the next one; the final stage's
+   * completes the login. They are the same thing to everything downstream,
+   * which is why both are spelled `submit`. Absent falls back to the config's
+   * own `submit`.
    */
-  readonly advance?: SelectorCandidate | SelectorCandidate[];
+  readonly submit?: SelectorCandidate | SelectorCandidate[];
 }
 
 export interface ILoginConfig {

@@ -19,6 +19,7 @@ import type { ActionExecFn } from '../../Types/SimplePhase.js';
 import { SimplePhase } from '../../Types/SimplePhase.js';
 import { DECLARATIVE_LOGIN_STEP } from '../LoginSteps/DeclarativeLoginStep.js';
 import { DIRECT_POST_LOGIN_STEP } from '../LoginSteps/DirectPostLoginStep.js';
+import { expandLoginStages } from '../LoginSteps/LoginStageExpansion.js';
 import { NATIVE_LOGIN_STEP } from '../LoginSteps/NativeLoginStep.js';
 
 type StepExecFn = ActionExecFn;
@@ -127,11 +128,26 @@ function resolveScrapeExec(state: IBuilderState): StepExecFn {
  * @param state - Builder state.
  * @returns Login BasePhase.
  */
-function buildLoginPhase(state: IBuilderState): BasePhase {
+function buildLoginPhase(state: IBuilderState): BasePhase | readonly BasePhase[] {
   if (state.apiDirectConfig) return createApiDirectCallPhase(state.apiDirectConfig);
-  if (state.loginConfig) return createLoginPhaseFromConfig(state.loginConfig);
+  if (state.loginConfig) return buildDeclarativeLoginPhases(state.loginConfig);
   const exec = resolveLoginExec(state);
   return Reflect.construct(SimplePhase, ['login', exec]);
+}
+
+/**
+ * Build the LOGIN pass (or passes) for a declarative bank.
+ *
+ * One pass per declared stage, because a login whose later inputs appear only
+ * after an earlier one is submitted is N ordinary logins rather than one
+ * unusual one. A bank declaring no stages expands to a single pass and is
+ * unchanged.
+ * @param config - The bank's login config.
+ * @returns One LOGIN phase per pass, in order.
+ */
+function buildDeclarativeLoginPhases(config: ILoginConfig): readonly BasePhase[] {
+  const passes = expandLoginStages(config);
+  return passes.map((pass): BasePhase => createLoginPhaseFromConfig(pass));
 }
 
 /**

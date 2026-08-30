@@ -49,7 +49,7 @@ const CIBUS_LOGIN: ILoginConfig = {
   // on the live page — a capture after the identify step carries two inputs and
   // no password field, and a reveal click changes the document by six bytes.
   stages: [
-    { credentialKeys: ['username'], advance: [] },
+    { credentialKeys: ['username'] },
     { credentialKeys: ['password'] },
   ],
 };
