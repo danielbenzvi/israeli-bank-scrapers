@@ -260,3 +260,57 @@ describe('enrichCardDetail — spending and stopping', () => {
     expect(out).toHaveLength(2);
   });
 });
+
+describe('enrichCardDetail — voucher identification across both banks', () => {
+  it("reads Isracard's voucher field, not only Amex's", async () => {
+    // Reading only Amex's names left most Isracard rows with no voucher, so
+    // they were recorded as unfetchable and no category was ever requested —
+    // most of the enrichment lost quietly, with nothing failing.
+    let calls = 0;
+    const deps = await withResolvableCard({
+      /**
+       *
+       */
+      post: async () => {
+        calls++;
+        return okResponse({ businessName: 'M', branchDescription: 'C' });
+      },
+    });
+    await enrichCardDetail([{ voucherNumberRatz: '4242', merchantName: 'M' }], deps);
+    expect(calls).toBe(1);
+  });
+
+  it('reads the outbound-currency voucher too', async () => {
+    let calls = 0;
+    const deps = await withResolvableCard({
+      /**
+       *
+       */
+      post: async () => {
+        calls++;
+        return okResponse({ businessName: 'M', branchDescription: 'C' });
+      },
+    });
+    await enrichCardDetail([{ voucherNumberRatzOutbound: '4242', merchantName: 'M' }], deps);
+    expect(calls).toBe(1);
+  });
+
+  it('treats the all-zeros sentinel as no voucher rather than an id', async () => {
+    // This provider marks "no voucher" with all zeros; requesting detail for
+    // it would spend a request against a rate-limited endpoint to learn
+    // nothing.
+    let calls = 0;
+    const deps = await withResolvableCard({
+      /**
+       *
+       */
+      post: async () => {
+        calls++;
+        return okResponse({});
+      },
+    });
+    const out = await enrichCardDetail([{ voucherNumberRatz: '000000000', merchantName: 'M' }], deps);
+    expect(calls).toBe(0);
+    expect(out).toHaveLength(1);
+  });
+});
