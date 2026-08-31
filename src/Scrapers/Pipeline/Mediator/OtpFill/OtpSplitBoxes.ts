@@ -30,7 +30,11 @@
 import type { Page } from 'playwright-core';
 
 import type { SelectorCandidate } from '../../../Base/Config/LoginConfigTypes.js';
-import { WK_OTP_REMEMBER_DEVICE, WK_OTP_SPLIT_BOXES } from '../../Registry/WK/OtpFillWK.js';
+import {
+  WK_OTP_CONSENT_ACCEPT,
+  WK_OTP_REMEMBER_DEVICE,
+  WK_OTP_SPLIT_BOXES,
+} from '../../Registry/WK/OtpFillWK.js';
 import type { IActionContext, IResolvedTarget } from '../../Types/PipelineContext.js';
 import { raceResultToTarget } from '../Elements/ActionExecutors.js';
 import type { IActionMediator, IElementMediator } from '../Elements/ElementMediator.js';
@@ -95,23 +99,35 @@ export interface IOtpFormTargets {
   readonly boxes: readonly IResolvedTarget[];
   /** The remember-this-device control, or false when the screen has none. */
   readonly remember: IResolvedTarget | false;
+  /**
+   * The consent-banner accept control, or false when no banner is up.
+   *
+   * The banner is dismissed at HOME, but the popup probe does not run for this
+   * phase, so one still standing here has nothing else to clear it — and it
+   * sits over the submit, where it swallowed the click and left a filled code
+   * that was never sent.
+   */
+  readonly consent: IResolvedTarget | false;
 }
 
 /**
- * Resolve the remember-this-device control, if the screen offers one.
+ * Resolve one optional control on the code screen.
  *
- * Absence is the normal case — most providers do not offer one — so a miss is
- * a `false`, never a failure.
+ * Absence is the normal case for both callers — most providers offer neither a
+ * remember-device control nor a banner still standing here — so a miss is a
+ * `false`, never a failure.
  * @param args - Mediator + page.
+ * @param list - Well-known candidates to race for this control.
  * @returns The control, or false.
  */
-async function resolveRemember(args: IDiscoverSplitArgs): Promise<IResolvedTarget | false> {
-  const candidates = WK_OTP_REMEMBER_DEVICE as unknown as readonly SelectorCandidate[];
-  const result = await args.mediator
-    .resolveVisible(candidates, OTP_SPLIT_BOX_PROBE_TIMEOUT_MS)
-    .catch((): false => false);
-  if (result === false) return false;
-  return raceResultToTarget(result, args.page);
+async function resolveOne(
+  args: IDiscoverSplitArgs,
+  list: readonly unknown[],
+): Promise<IResolvedTarget | false> {
+  const candidates = list as readonly SelectorCandidate[];
+  const probe = args.mediator.resolveVisible(candidates, OTP_SPLIT_BOX_PROBE_TIMEOUT_MS);
+  const result = await probe.catch((): false => false);
+  return result === false ? false : raceResultToTarget(result, args.page);
 }
 
 /**
@@ -122,8 +138,10 @@ async function resolveRemember(args: IDiscoverSplitArgs): Promise<IResolvedTarge
 export async function discoverSplitBoxes(args: IDiscoverSplitArgs): Promise<IOtpFormTargets> {
   const candidates = WK_OTP_SPLIT_BOXES as unknown as readonly SelectorCandidate[];
   const found = await collectBoxes(args, candidates, []);
-  const remember = await resolveRemember(args);
-  return { boxes: found.length >= MIN_SPLIT_BOXES ? found : [], remember };
+  const remember = await resolveOne(args, WK_OTP_REMEMBER_DEVICE);
+  const consent = await resolveOne(args, WK_OTP_CONSENT_ACCEPT);
+  const boxes = found.length >= MIN_SPLIT_BOXES ? found : [];
+  return { boxes, remember, consent };
 }
 
 /**
@@ -179,7 +197,7 @@ export async function fillSplitBoxes(args: IFillSplitArgs): Promise<true> {
 export const OTP_SPLIT_BOXES_KEY = 'otpSplitBoxTargets';
 
 /** What a screen PRE never inspected yields. */
-const NO_TARGETS: IOtpFormTargets = { boxes: [], remember: false };
+const NO_TARGETS: IOtpFormTargets = { boxes: [], remember: false, consent: false };
 
 /**
  * Read the targets PRE stamped, if any.
@@ -207,6 +225,29 @@ export interface ITickRememberArgs {
  */
 export async function tickRememberIfOffered(args: ITickRememberArgs): Promise<boolean> {
   const target = readSplitBoxes(args.diagnostics).remember;
+  if (target === false) return false;
+  const selRef = { contextId: target.contextId, selector: target.selector };
+  await args.executor.clickElement(selRef).catch((): false => false);
+  return true;
+}
+
+/**
+ * Clear a consent banner still standing over the code screen.
+ *
+ * Called BEFORE the fill, not just before the submit: the banner overlays the
+ * boxes as well, and a click it swallows is indistinguishable from one that
+ * landed — the phase reports a filled, submitted code and the provider never
+ * receives one.
+ *
+ * The popup probe runs for `home`, `account-resolve` and `dashboard` only, so
+ * nothing else clears a banner that is still up by this phase. Only the
+ * consent control is clicked here, never the generic dismissal list, which
+ * carries a `ביטול` that would cancel the form itself.
+ * @param args - Executor + the diagnostics PRE stamped.
+ * @returns True when a banner was dismissed, false when none was up.
+ */
+export async function dismissConsentIfPresent(args: ITickRememberArgs): Promise<boolean> {
+  const target = readSplitBoxes(args.diagnostics).consent;
   if (target === false) return false;
   const selRef = { contextId: target.contextId, selector: target.selector };
   await args.executor.clickElement(selRef).catch((): false => false);

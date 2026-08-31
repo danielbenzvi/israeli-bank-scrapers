@@ -20,7 +20,8 @@ import {
   OTP_RETRIEVER_SETTLE_MS,
 } from '../Timing/OtpTimingConfig.js';
 import { RACE_TIMED_OUT, raceTimeout } from '../Timing/TimingActions.js';
-import { fillSplitBoxes, readSplitBoxes, tickRememberIfOffered } from './OtpSplitBoxes.js';
+import { writeCodeIntoForm } from './OtpFillPhaseActions.Write.js';
+import { tickRememberIfOffered } from './OtpSplitBoxes.js';
 
 /**
  * False-returning catch handler — silences expected Playwright rejects.
@@ -238,25 +239,6 @@ async function fillAndSubmitOtpForm(args: IFillAndSubmitArgs): FillActionResult 
   return succeed(input);
 }
 
-/**
- * Write the code, by whichever shape this provider's field takes.
- *
- * Per-digit boxes win over a single target when both resolved. Measured, not
- * chosen on style: handing the whole code to the first box left boxes 1..5
- * `ng-pristine` and the submit disabled, because that component never advanced
- * focus. Addressing each box does not depend on it advancing.
- * @param args - Bundled input/executor/code.
- * @returns True once written, false when PRE resolved no target at all.
- */
-async function writeCodeIntoForm(args: IFillAndSubmitArgs): Promise<boolean> {
-  const { input, executor, code } = args;
-  const boxes = readSplitBoxes(input.diagnostics).boxes;
-  if (boxes.length > 0) return fillSplitBoxes({ executor, boxes, code });
-  const inputTarget = readDiagTarget(input.diagnostics, 'otpInputTarget');
-  if (!inputTarget) return false;
-  await executor.fillInput(inputTarget.contextId, inputTarget.selector, code);
-  return true;
-}
 
 /**
  * ACTION (sealed): Call retriever → fill code → click submit.

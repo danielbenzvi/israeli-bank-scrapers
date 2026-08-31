@@ -8,6 +8,7 @@
  */
 
 import {
+  WK_OTP_CONSENT_ACCEPT,
   WK_OTP_INPUT,
   WK_OTP_REMEMBER_DEVICE,
   WK_OTP_SUBMIT,
@@ -96,5 +97,21 @@ describe('remember-device candidates', () => {
     const firstText = indexOfFirst(list, (c): boolean => c.kind === 'clickableText');
     expect(firstInput).toBeGreaterThanOrEqual(0);
     expect(firstInput).toBeLessThan(firstText);
+  });
+});
+
+describe('consent dismissal on the code screen', () => {
+  it('clicks only the banner control, never a generic dismissal', () => {
+    // The popup probe runs for `home`, `account-resolve` and `dashboard` only,
+    // so a banner still standing at OTP-FILL has nothing else to clear it — and
+    // it overlays the submit, where it swallowed the click and left a filled
+    // code that was never sent.
+    //
+    // Reaching for WK_CLOSE_POPUP instead would be worse than the bug: it
+    // carries `ביטול`, which on a code screen cancels the FORM. The popup
+    // interceptor already refuses to run near a login screen for that reason.
+    const list = WK_OTP_CONSENT_ACCEPT as unknown as readonly IWkCandidate[];
+    expect(list).toHaveLength(1);
+    expect(list[0]?.value).toContain('onetrust-accept-btn-handler');
   });
 });

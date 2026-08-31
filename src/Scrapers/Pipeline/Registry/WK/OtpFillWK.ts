@@ -112,7 +112,21 @@ const WK_OTP_REMEMBER_DEVICE = [
   { kind: 'clickableText', value: 'זכור אותי' },
 ] as const;
 
+/**
+ * The consent-banner accept control, for clearing it off the CODE screen.
+ *
+ * Narrower than `WK_CLOSE_POPUP` on purpose. That list carries generic
+ * dismissals including `ביטול` — "cancel" — which on a one-time-code screen
+ * would cancel the form rather than a banner. The popup probe is deliberately
+ * not run near a login screen for exactly that class of reason; this is the
+ * one control that is unambiguous, addressed by the id its platform emits.
+ */
+const WK_OTP_CONSENT_ACCEPT = [
+  { kind: 'xpath', value: '//*[@id="onetrust-accept-btn-handler"]' },
+] as const;
+
 export {
+  WK_OTP_CONSENT_ACCEPT,
   WK_OTP_INPUT,
   WK_OTP_REMEMBER_DEVICE,
   WK_OTP_SPLIT_BOXES,
