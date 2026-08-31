@@ -20,6 +20,7 @@ import {
   OTP_RETRIEVER_SETTLE_MS,
 } from '../Timing/OtpTimingConfig.js';
 import { RACE_TIMED_OUT, raceTimeout } from '../Timing/TimingActions.js';
+import { fillSplitBoxes, readSplitBoxes, tickRememberIfOffered } from './OtpSplitBoxes.js';
 
 /**
  * False-returning catch handler — silences expected Playwright rejects.
@@ -213,10 +214,12 @@ interface IFillAndSubmitArgs {
  */
 async function clickSubmitIfPresent(args: IFillAndSubmitArgs): Promise<true> {
   const { input, executor } = args;
+  await tickRememberIfOffered({ executor, diagnostics: input.diagnostics });
   const target = readDiagTarget(input.diagnostics, 'otpSubmitTarget');
   if (target) await clickOtpSubmitTarget({ executor, target, logger: input.logger });
   return true;
 }
+
 
 /** Promise alias keeping fill/executeAction sigs single-line. */
 type FillActionResult = Promise<Procedure<IActionContext>>;
@@ -227,14 +230,32 @@ type FillActionResult = Promise<Procedure<IActionContext>>;
  * @returns Updated context on success, or fail if PRE target missing.
  */
 async function fillAndSubmitOtpForm(args: IFillAndSubmitArgs): FillActionResult {
-  const { input, executor, code } = args;
-  const inputTarget = readDiagTarget(input.diagnostics, 'otpInputTarget');
-  if (!inputTarget) return fail(ScraperErrorTypes.Generic, 'OTP input target missing from PRE');
-  await executor.fillInput(inputTarget.contextId, inputTarget.selector, code);
-  input.logger.debug({ message: `filled ${inputTarget.kind}="${inputTarget.candidateValue}"` });
+  const { input, executor } = args;
+  const didWrite = await writeCodeIntoForm(args);
+  if (!didWrite) return fail(ScraperErrorTypes.Generic, 'OTP input target missing from PRE');
   await clickSubmitIfPresent(args);
   await settleAfterOtpSubmit(executor, input.logger);
   return succeed(input);
+}
+
+/**
+ * Write the code, by whichever shape this provider's field takes.
+ *
+ * Per-digit boxes win over a single target when both resolved. Measured, not
+ * chosen on style: handing the whole code to the first box left boxes 1..5
+ * `ng-pristine` and the submit disabled, because that component never advanced
+ * focus. Addressing each box does not depend on it advancing.
+ * @param args - Bundled input/executor/code.
+ * @returns True once written, false when PRE resolved no target at all.
+ */
+async function writeCodeIntoForm(args: IFillAndSubmitArgs): Promise<boolean> {
+  const { input, executor, code } = args;
+  const boxes = readSplitBoxes(input.diagnostics).boxes;
+  if (boxes.length > 0) return fillSplitBoxes({ executor, boxes, code });
+  const inputTarget = readDiagTarget(input.diagnostics, 'otpInputTarget');
+  if (!inputTarget) return false;
+  await executor.fillInput(inputTarget.contextId, inputTarget.selector, code);
+  return true;
 }
 
 /**

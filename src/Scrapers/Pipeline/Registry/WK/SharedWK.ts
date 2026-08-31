@@ -23,6 +23,19 @@ const WK_CLOSE_POPUP = [
   // live from www.leumi.co.il/he. See Elements/Create/Locators.ts.
   { kind: 'ariaLabel', value: 'סגירה' },
   { kind: 'exactText', value: 'סגירה' },
+  // OneTrust consent banner — the accept control, addressed by the id the
+  // platform emits on every site that uses it.
+  //
+  // Matched by id rather than by its label because that label is "אישור",
+  // which is also what a form's own submit says. A text candidate here would
+  // dismiss the banner on some pages and confirm a form on others.
+  //
+  // This banner is not merely cosmetic. It stays on top of the page and its
+  // prose ("המשך גלישה באתר מהווה הסכמה") contains the very words a submit
+  // carries, so while it is up it keeps winning submit resolution against the
+  // control the phase actually wants — costing a login that was otherwise
+  // complete. Clearing it early is what stops that.
+  { kind: 'xpath', value: '//*[@id="onetrust-accept-btn-handler"]' },
 ] as const;
 
 /**

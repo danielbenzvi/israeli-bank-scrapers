@@ -48,3 +48,12 @@ export const OTP_RETRIEVER_SETTLE_MS = 500;
  * cross-validation continues to pass without renaming.
  */
 export const DEFAULT_OTP_TIMEOUT_MS = 180_000;
+
+/**
+ * Per-box probe budget for a split code field.
+ *
+ * Deliberately short: the boxes are already on screen by the time PRE runs,
+ * and the probe that ENDS the field is a miss, so this budget is paid once
+ * per discovery rather than once per box.
+ */
+export const OTP_SPLIT_BOX_PROBE_TIMEOUT_MS = 1000;
