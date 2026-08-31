@@ -402,6 +402,39 @@ export interface IApiDirectScrapeShape<TAcct, TCursor> {
    * scope-config that backs `$ref` resolution.
    */
   readonly secrets?: Readonly<Record<string, string>>;
+  /**
+   * Optional per-row provider payload, carried onto `ITransaction.providerExtra`.
+   *
+   * The shared auto-mapper populates only the fields the Well-Known dictionary
+   * can alias, and `providerExtra` is not one: it is a per-provider BAG, not a
+   * key, so no alias can reach it. A bank whose consumer needs provider values
+   * the standard fields cannot express declares them here.
+   *
+   * Cibus is the case that required it. Its rows carry the split between the
+   * employer benefit's share and the household's own, the legacy scraper always
+   * emitted it, and a consumer validates the two against the price as its only
+   * early warning that the provider changed how it splits a purchase. Without
+   * this hook the Pipeline backend dropped the split silently while reporting a
+   * complete scrape.
+   *
+   * Absent ⇒ no bag, and every existing shape is byte-identical.
+   */
+  readonly providerExtraOf?: (row: object) => Readonly<Record<string, unknown>>;
+  /**
+   * Optional per-row purchase date, stated by the shape as `YYYY-MM-DD`.
+   *
+   * The shared coercion parses a recognised format and re-emits it with
+   * `moment(...).toISOString()`, which converts local midnight to UTC. East of
+   * Greenwich that is the PREVIOUS calendar day — a 29/06 purchase became
+   * `2026-06-28T21:00:00.000Z`. Most consumers convert back through a
+   * timezone-aware key and never notice; one that keys rows on the bare date
+   * cannot, and a wrong day there does not surface as an error — it re-imports
+   * the row as a new purchase, forever.
+   *
+   * A shape that declares this keeps the calendar day the provider stated,
+   * because only the shape knows the raw format. Absent ⇒ the coerced value.
+   */
+  readonly purchaseDateOf?: (row: object) => string;
   readonly customer: IApiDirectScrapeCustomerStep<TAcct>;
   readonly balance: IApiDirectScrapeBalanceStep<TAcct>;
   readonly transactions: IApiDirectScrapeTxnsStep<TAcct, TCursor>;

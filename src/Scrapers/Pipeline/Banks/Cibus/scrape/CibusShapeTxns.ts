@@ -27,9 +27,15 @@ import type {
 } from '../../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
 import type { IPage } from '../../../Strategy/Fetch/Pagination.js';
 import type { IActionContext } from '../../../Types/PipelineContext.js';
-import type { ICibusDataResponse } from './CibusMapping.js';
+import type { ICibusDataResponse, ICibusDeal } from './CibusMapping.js';
 import { partitionByActivity } from './CibusMapping.js';
-import { CIBUS_DATA_HEADERS, dataUrl, type ICibusAcct, VERB_DEALS } from './CibusShapeHelpers.js';
+import {
+  assertNotRefused,
+  CIBUS_DATA_HEADERS,
+  dataUrl,
+  type ICibusAcct,
+  VERB_DEALS,
+} from './CibusShapeHelpers.js';
 
 /** The provider's own date format, which its filters expect. */
 const PROVIDER_DATE_FORMAT = 'DD/MM/YYYY';
@@ -103,9 +109,36 @@ export function txnsExtractPage(args: IExtractPageArgs<ICibusAcct, number>): IPa
   const chunks = scrapeChunks(args.ctx);
   const idx = args.cursor === false ? 0 : args.cursor;
   const nextCursor = idx + 1 < chunks.length ? idx + 1 : false;
-  const envelope = args.body as ICibusDataResponse;
+  const checked = assertNotRefused(args.body, 'transactions');
+  const envelope = checked as ICibusDataResponse;
   const partition = partitionByActivity(envelope.list ?? []);
-  return { items: partition.countable, nextCursor };
+  return { items: partition.countable.map(toMappableRow), nextCursor };
+}
+
+/**
+ * Restate one provider row under the names the shared mapper looks for.
+ *
+ * The auto-mapper populates a field only when the row carries a key the
+ * Well-Known dictionary lists for it. This provider names its own: `price`,
+ * `rest_name`, `deal_id` — and of those the dictionary knows NONE. Only `date`
+ * aliased, so a row mapped clean and arrived with amount 0, no description and
+ * no identifier, on a scrape that reported success and the right row count.
+ *
+ * Restated here rather than by widening the dictionary: `price`, and to a
+ * lesser extent `id`-shaped keys, are generic enough that adding them globally
+ * would change how rows map for every other institution that happens to carry
+ * one. The provider's own fields are kept alongside, so the funding split still
+ * reads off the same row.
+ *
+ * The amount is NEGATED: this provider reports a purchase as a positive
+ * magnitude, while a transaction records spend as negative. `isCardIssuer` is
+ * not set for this bank, so nothing downstream flips the sign for us.
+ * @param deal - One countable purchase row.
+ * @returns The row, plus the aliases the mapper resolves against.
+ */
+function toMappableRow(deal: ICibusDeal): object {
+  const wk = { chargedAmount: -deal.price, description: deal.rest_name ?? '' };
+  return { ...deal, ...wk, identifier: deal.deal_id };
 }
 
 /** Transactions step — one purchase-feed POST per month chunk. */

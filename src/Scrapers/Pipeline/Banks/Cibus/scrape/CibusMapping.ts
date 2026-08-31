@@ -51,6 +51,17 @@ export interface ICibusBudget {
  * only truncation signal this payload offers; silent truncation in a backfill
  * reads as a quiet month rather than as missing data.
  */
+/**
+ * The provider's refusal envelope.
+ *
+ * Every endpoint answers a refused call in this shape INSTEAD of the payload —
+ * no `list`, no `data`. `code` is the provider's own numeric verdict; zero and
+ * absent both mean "not a refusal".
+ */
+export interface ICibusRefusal {
+  code?: number;
+}
+
 export interface ICibusDataResponse {
   list?: ICibusDeal[];
   head?: { count?: number };
@@ -194,8 +205,14 @@ function toDates(raw: string): { date: string; processedDate: string } {
  * `chargedAmount` carries the FULL order value, not the household's own share.
  * That is deliberate: a consumer matches this row against a marketplace order
  * recorded at full value, and using the out-of-pocket share would silently stop
- * that match from ever succeeding. The employer / out-of-pocket split is on the
- * provider row itself and reaches a caller through `rawTransaction`.
+ * that match from ever succeeding. The employer / out-of-pocket split therefore
+ * rides `providerExtra`, which is ALWAYS present.
+ *
+ * Not `rawTransaction`, which an earlier revision relied on: that key exists
+ * only when the caller asks for it via `includeRawTransaction`, so the split
+ * silently vanished on every ordinary scrape. A consumer validating the split
+ * then saw a malformed contract where the real fault was an absent option, and
+ * one funding the household's benefit accounting off it would have read zero.
  * @param deal - A raw purchase row.
  * @param options - Scraper options, for raw-transaction inclusion.
  * @returns A standard transaction.
@@ -207,7 +224,22 @@ export function toTransaction(deal: ICibusDeal, options: ScraperOptions): ITrans
   const core = { type: TransactionTypes.Normal, identifier: deal.deal_id, ...dates };
   const body = { description: deal.rest_name ?? '', status: TransactionStatuses.Completed };
   const raw = options.includeRawTransaction === true ? { rawTransaction: deal } : {};
-  return { ...core, ...money, ...body, ...raw };
+  const extra = { providerExtra: toDealExtra(deal) };
+  return { ...core, ...money, ...body, ...extra, ...raw };
+}
+
+/**
+ * The funding split, as the consumer's own schema names it.
+ *
+ * Key names are the provider's, carried through verbatim: `etc_company_price`
+ * is the employer benefit's share and `otl_price` the household's own, and the
+ * two must sum to `price`. Renaming either here would move the place a contract
+ * change is noticed away from the one schema that checks it.
+ * @param deal - A raw purchase row.
+ * @returns The split, for the transaction's `providerExtra`.
+ */
+export function toDealExtra(deal: ICibusDeal): Readonly<Record<string, unknown>> {
+  return { companyPrice: deal.etc_company_price, otlPrice: deal.otl_price, time: deal.time };
 }
 
 /**

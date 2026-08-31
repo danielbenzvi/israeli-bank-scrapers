@@ -7,7 +7,9 @@
  * the verb it names.
  */
 
+import ScraperError from '../../../../Base/ScraperError.js';
 import { literalUrl, type WKUrlOrLiteral } from '../../../Registry/WK/UrlsWK.js';
+import type { ICibusRefusal } from './CibusMapping.js';
 
 /** The provider's single verb-dispatched data endpoint. */
 const CIBUS_DATA_URL = 'https://api.consumers.pluxee.co.il/api/main.py';
@@ -56,6 +58,35 @@ export interface ICibusAcct {
 
 /** The single account, resolved without asking the provider. */
 export const CIBUS_ACCOUNT: ICibusAcct = { id: 'cibus' };
+
+/**
+ * Reject a refused call instead of reading it as an empty payload.
+ *
+ * WHY A THROW AND NOT AN EMPTY PAGE. This provider answers an absent or expired
+ * session with `{code, msg}` and no payload key. Read as a payload, that is
+ * byte-for-byte what "this month had no purchases" looks like — so a dead
+ * session reports success carrying nothing. That is the one failure the
+ * household cannot see, because a month that silently went missing is
+ * indistinguishable from a month that was genuinely quiet, and the spend it
+ * carried is simply absent from every total.
+ *
+ * A zero or absent `code` is NOT a refusal: a genuinely empty month still
+ * returns an empty page, exactly as before.
+ *
+ * The code alone is reported. The accompanying `msg` is the provider's own
+ * prose about the session and has no place in a log line.
+ * @param body - The response body for one call.
+ * @param step - Step name, so the message says which call was refused.
+ * @returns The same body, once it is established not to be a refusal.
+ * @throws ScraperError when the provider refused the call.
+ */
+export function assertNotRefused(body: unknown, step: string): ICibusRefusal {
+  const envelope = (body ?? {}) as ICibusRefusal;
+  const code = envelope.code ?? 0;
+  if (code === 0) return envelope;
+  const why = `Cibus refused the ${step} request (code ${String(code)});`;
+  throw new ScraperError(`${why} no rows were returned.`);
+}
 
 /**
  * The fixed data endpoint every step posts to.

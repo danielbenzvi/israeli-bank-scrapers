@@ -65,10 +65,17 @@ function buildCibusPipeline(options: ScraperOptions): Procedure<IPipelineDescrip
     .withBrowser()
     .withDeclarativeLogin(CIBUS_LOGIN)
     .withOtpTrigger()
-    // required=false: the device token suppresses the challenge for ~30 days,
-    // so on a warm run there is no code input on the page and its absence is
+    // required=false: on a WARM run the device token suppresses the challenge
+    // for ~30 days, so there is no code input on the page and its absence is
     // the expected state rather than a failure — the same reason Hapoalim
-    // declares it. A cold run still fills it.
+    // declares it.
+    //
+    // A COLD run is not yet handled here. The provider raises the challenge as
+    // a split six-box code field, which `WK_OTP_INPUT` does not resolve and
+    // `fillInput` could not fill in one call even if it did, so the phase
+    // soft-skips and the session is never established. That is caught by
+    // `assertNotRefused` on the first data call rather than passing for an
+    // empty month — loud, but still short of filling the code.
     .withOtpFill(false)
     .withBrowserApiDirect(CIBUS_SHAPE)
     .build();

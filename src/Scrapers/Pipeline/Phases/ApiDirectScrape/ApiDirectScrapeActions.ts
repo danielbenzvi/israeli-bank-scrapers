@@ -11,7 +11,6 @@ import type { ITransaction, ITransactionsAccount } from '../../../../Transaction
 import type { IApiMediator } from '../../Mediator/Api/ApiMediator.js';
 import { resolveApiMediator } from '../../Mediator/Api/ApiMediatorAccessor.js';
 import { reportMapRejects } from '../../Mediator/Scrape/CoverageAudit/MapRejects.js';
-import { autoMapTransaction } from '../../Mediator/Scrape/ScrapeAutoMapper.js';
 import { applyStartWindow } from '../../Mediator/Scrape/StartWindow.js';
 import { collapseDuplicates } from '../../Mediator/Scrape/TxnDedup.js';
 import { isSome, some } from '../../Types/Option.js';
@@ -21,6 +20,7 @@ import { isOk, succeed } from '../../Types/Procedure.js';
 import { collectAccountRows } from './ApiDirectScrapeBackfill.js';
 import runBootstrap from './ApiDirectScrapeBootstrap.js';
 import type { IAcctCtx, IDriverCtx } from './ApiDirectScrapeDispatchArgs.js';
+import { type IMapTxnsOpts, mapOne } from './ApiDirectScrapeMapRow.js';
 import runPrime from './ApiDirectScrapePrime.js';
 import { fetchAccounts, fetchBalance } from './ApiDirectScrapeSteps.js';
 import type { ApiDirectScrapeResult } from './ApiDirectScrapeTypes.js';
@@ -39,13 +39,13 @@ type AcctsAcc = Procedure<readonly IAccountResult[]>;
 
 /**
  * Map raw rows through autoMapTransaction (drops rejects).
- * @param raws - Raw rows emitted by the shape's extractPage.
- * @param isCardIssuer - Declared by the shape; decides charge-sign handling.
- * @returns Mapped ITransactions (rejects filtered out).
+ * @param raws - Raw rows from the shape's extractPage.
+ * @param opts - Shape-declared mapping options.
+ * @returns Mapped ITransactions.
  */
-function mapTxns(raws: readonly object[], isCardIssuer?: boolean): readonly ITransaction[] {
+function mapTxns(raws: readonly object[], opts: IMapTxnsOpts): readonly ITransaction[] {
   const widened = raws as unknown as readonly Record<string, unknown>[];
-  const mapped = widened.map((raw): ITransaction | false => autoMapTransaction(raw, isCardIssuer));
+  const mapped = widened.map((raw): ITransaction | false => mapOne(raw, opts));
   return mapped.filter((t): t is ITransaction => t !== false);
 }
 
@@ -66,7 +66,8 @@ function mapAndReport<TAcct, TCursor>(
   raws: readonly object[],
   label: string,
 ): readonly ITransaction[] {
-  const mapped = mapTxns(raws, a.shape.isCardIssuer);
+  const { isCardIssuer, providerExtraOf } = a.shape;
+  const mapped = mapTxns(raws, { isCardIssuer, providerExtraOf });
   reportMapRejects({ extracted: raws.length, mapped: mapped.length, label });
   return mapped;
 }

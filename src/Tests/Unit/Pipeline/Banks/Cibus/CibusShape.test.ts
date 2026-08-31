@@ -200,11 +200,88 @@ describe('Cibus scrape shape', () => {
     expect(page.items).toHaveLength(1);
   });
 
+  it('restates each row under the names the shared mapper resolves', () => {
+    // This provider's own key names — `price`, `rest_name`, `deal_id` — are in
+    // the Well-Known dictionary for NO field. Only `date` aliased, so rows
+    // mapped clean and arrived with amount 0, no description and no identifier,
+    // on a scrape reporting success and the right count. The amount is negated
+    // because the provider states a purchase as a positive magnitude.
+    const body = { head: { count: 1 }, list: [deal()], code: 0 };
+    const args = pageArgs(body);
+    const page = CIBUS_SHAPE.transactions.extractPage(args);
+    const row = page.items[0] as Record<string, unknown>;
+    expect(row.chargedAmount).toBe(-62.5);
+    expect(row.description).toBe('MERCHANT');
+    expect(row.identifier).toBe(555001);
+  });
+
+  it('states the purchase day as a bare date, never a UTC instant', () => {
+    // The shared coercion re-emits a parsed date with `toISOString()`, which at
+    // UTC+3 turns local midnight into the PREVIOUS day: a 29/06 purchase became
+    // "2026-06-28T21:00:00.000Z". A consumer keying rows on the bare date reads
+    // that as a different purchase — and a wrong day never surfaces as an
+    // error, it re-imports the row as new, forever.
+    const row = deal({ date: '29/06/2026' });
+    const stated = CIBUS_SHAPE.purchaseDateOf?.(row);
+    expect(stated).toBe('2026-06-29');
+  });
+
+  it('keeps the provider fields the funding split is read from', () => {
+    // The restated row is what `providerExtraOf` receives. Dropping the
+    // provider's own keys while renaming would take the split with them.
+    const body = { head: { count: 1 }, list: [deal()], code: 0 };
+    const args = pageArgs(body);
+    const page = CIBUS_SHAPE.transactions.extractPage(args);
+    const bag = CIBUS_SHAPE.providerExtraOf?.(page.items[0]) ?? {};
+    expect(bag).toMatchObject({ companyPrice: 40, otlPrice: 22.5 });
+  });
+
   it('tolerates a month the provider answered with no rows', () => {
     const body = { head: { count: 0 }, list: [], code: 0 };
     const args = pageArgs(body);
     const page = CIBUS_SHAPE.transactions.extractPage(args);
     expect(page.items).toEqual([]);
+  });
+
+  it('refuses a call the provider refused, rather than calling it an empty month', () => {
+    // The failure this exists for: a refusal carries no `list`, so read as a
+    // payload it is byte-for-byte a quiet month. The spend it should have
+    // carried would then be absent from every total with nothing to see.
+    const body = { code: 177 };
+    const args = pageArgs(body);
+    expect((): unknown => CIBUS_SHAPE.transactions.extractPage(args)).toThrow(/code 177/);
+  });
+
+  it('does not report the provider\u2019s own prose about the session', () => {
+    // The message accompanying a refusal is the provider talking about the
+    // session token. The numeric verdict is enough to act on.
+    const body = { code: 177, msg: "Can't find cookie token" };
+    const args = pageArgs(body);
+    expect((): unknown => CIBUS_SHAPE.transactions.extractPage(args)).not.toThrow(/cookie/);
+  });
+
+  it('declares a provider bag, so the shared mapper carries the split', () => {
+    // The split silently vanished when it rode `rawTransaction`: that key is
+    // present only when the caller sets `includeRawTransaction`, so an ordinary
+    // scrape produced rows a consumer read as a violated contract. The employer
+    // share is deferred salary and still the household's spend, so losing it is
+    // not cosmetic — it is the field the benefit accounting is built on.
+    // Exercised through the SHAPE's own hook, which is what the mapper calls.
+    // `toTransaction` is not on this path at all — the shared auto-mapper builds
+    // the transaction — so asserting against it would prove nothing about a run.
+    const row = deal();
+    const extra = CIBUS_SHAPE.providerExtraOf?.(row) as { companyPrice?: number; otlPrice?: number };
+    expect(extra.companyPrice).toBe(40);
+    expect(extra.otlPrice).toBe(22.5);
+  });
+
+  it('keeps the provider\u2019s own key names for the split', () => {
+    // One schema checks this split, downstream. Renaming a key here moves the
+    // place a provider change is noticed away from the check that would catch it.
+    const row = deal();
+    const bag = CIBUS_SHAPE.providerExtraOf?.(row) ?? {};
+    const keys = Object.keys(bag).sort();
+    expect(keys).toEqual(['companyPrice', 'otlPrice', 'time']);
   });
 
   it('reads the balance out of the array the provider wraps it in', () => {
