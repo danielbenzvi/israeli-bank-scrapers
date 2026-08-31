@@ -7,7 +7,7 @@ import type { Frame, Page } from 'playwright-core';
 
 import type { SelectorCandidate } from '../../../Base/Config/LoginConfigTypes.js';
 import { WK_LOGIN_ERROR } from '../../Registry/WK/LoginWK.js';
-import { WK_OTP_INPUT, WK_OTP_SUBMIT } from '../../Registry/WK/OtpFillWK.js';
+import { WK_OTP_INPUT, WK_OTP_SPLIT_BOXES, WK_OTP_SUBMIT } from '../../Registry/WK/OtpFillWK.js';
 import { WK_OTP_TRIGGER } from '../../Registry/WK/OtpTriggerWK.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { succeed } from '../../Types/Procedure.js';
@@ -27,6 +27,21 @@ import {
 async function detectOtpForm(mediator: IElementMediator): Promise<Procedure<IRaceResult>> {
   const candidates = WK_OTP_INPUT as unknown as readonly SelectorCandidate[];
   const result = await mediator.resolveVisible(candidates, OTP_FORM_PROBE_TIMEOUT_MS);
+  return succeed(result);
+}
+
+/**
+ * Detect whether a SPLIT code field is on the page.
+ *
+ * Only the first box is asked for: the boxes appear and vanish together, so
+ * one is enough to answer "is the form still here", and asking for all of
+ * them would pay the probe budget six times to learn the same fact.
+ * @param mediator - Active mediator.
+ * @returns Procedure with full race result.
+ */
+async function detectOtpSplitField(mediator: IElementMediator): Promise<Procedure<IRaceResult>> {
+  const first = WK_OTP_SPLIT_BOXES.slice(0, 1) as unknown as readonly SelectorCandidate[];
+  const result = await mediator.resolveVisible(first, OTP_FORM_PROBE_TIMEOUT_MS);
   return succeed(result);
 }
 
@@ -74,4 +89,5 @@ async function detectOtpError(mediator: IElementMediator): Promise<IRaceResult> 
     .catch((): IRaceResult => NOT_FOUND);
 }
 
-export { detectOtpError, detectOtpForm, detectOtpSubmit, detectOtpTrigger };
+export {
+detectOtpError, detectOtpForm,   detectOtpSplitField, detectOtpSubmit, detectOtpTrigger };

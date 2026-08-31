@@ -12,7 +12,7 @@ import type { Procedure } from '../../Types/Procedure.js';
 import { fail, succeed } from '../../Types/Procedure.js';
 import type { IElementMediator } from '../Elements/ElementMediator.js';
 import { traceResolution } from '../Elements/ResolutionTrace.js';
-import { detectOtpError, detectOtpForm } from '../Form/OtpProbe.js';
+import { detectOtpError, detectOtpForm, detectOtpSplitField } from '../Form/OtpProbe.js';
 import { OTP_FALLBACK, unwrapProbe } from '../Otp/OtpShared.js';
 import { type AuthFlowCallback, captureDeviceToken } from './OtpDeviceToken.js';
 
@@ -46,7 +46,32 @@ async function isOtpFormStillPresent(
 ): Promise<boolean> {
   const mfaResult = unwrapProbe(await detectOtpForm(mediator).catch(OTP_FALLBACK));
   traceResolution(logger, 'OTP_FILL.POST re-probe', mfaResult);
-  return mfaResult.found;
+  if (mfaResult.found) return true;
+  return isSplitFieldStillPresent(mediator, logger);
+}
+
+/**
+ * Re-probe a SPLIT code field, which the single-input probe cannot see.
+ *
+ * Probed on the visible boxes rather than a hidden whole-code input: the
+ * hidden field survives in the DOM after a successful login, so matching it
+ * reported an accepted code as a rejection. The boxes go with the form.
+ *
+ * Without this, a submit that never fired — the code filled, the button
+ * enabled, and the click lost — passed POST silently and surfaced later as a
+ * refused data call, having spent a one-time code to get there.
+ * @param mediator - Element mediator.
+ * @param logger - Pipeline logger.
+ * @returns True iff the split code field is still on the page.
+ */
+async function isSplitFieldStillPresent(
+  mediator: IElementMediator,
+  logger: IPipelineContext['logger'],
+): Promise<boolean> {
+  const probe = await detectOtpSplitField(mediator).catch(OTP_FALLBACK);
+  const result = unwrapProbe(probe);
+  traceResolution(logger, 'OTP_FILL.POST split re-probe', result);
+  return result.found;
 }
 
 /**

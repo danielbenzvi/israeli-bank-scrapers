@@ -66,11 +66,12 @@ describe('OTP submit candidates', () => {
 });
 
 describe('OTP input candidates', () => {
-  it('never matches a split field, which POST would misread', () => {
-    // POST re-probes THIS list to ask whether the code form is still there.
-    // The boxes linger for a moment after a correct code is submitted, so a
-    // candidate here turns an accepted code into a silent rejection and sends
-    // the phase round again for a code the provider already accepted.
+  it('never matches a split field from the single-input list', () => {
+    // Split-field discovery lives in WK_OTP_SPLIT_BOXES. POST probes that list
+    // separately, on the VISIBLE boxes: the hidden whole-code input survives a
+    // successful login, so matching it here reported an accepted code as a
+    // rejection — while omitting the boxes entirely let a submit that never
+    // fired pass POST silently, and cost a one-time code to discover.
     const list = WK_OTP_INPUT as unknown as readonly IWkCandidate[];
     const isBoxMatched = list.some((c): boolean => c.value.includes('@maxlength="1"'));
     expect(isBoxMatched).toBe(false);
