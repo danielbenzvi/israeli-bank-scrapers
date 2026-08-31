@@ -16,7 +16,9 @@ import {
 } from '../../Mediator/Home/HomeActions.js';
 import { resolveHomeWithRecovery, toRecoveryArgs } from '../../Mediator/Home/HomeCrashRecovery.js';
 import type { IHomeDiscovery } from '../../Mediator/Home/HomeResolver.js';
+import { replayDeviceToken } from '../../Mediator/Init/DeviceTokenReplay.js';
 import { HOME_PRELUDE_TIMEOUT_MS } from '../../Mediator/Timing/HomeTimingConfig.js';
+import resolvePipelineBankConfig from '../../Registry/Config/PipelineBankConfig.js';
 import type { IActionContext, IPipelineContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, succeed } from '../../Types/Procedure.js';
@@ -68,6 +70,11 @@ class HomePhase extends BasePhase {
   ): Promise<Procedure<IActionContext>> {
     if (!input.executor.has) return fail(ScraperErrorTypes.Generic, 'HOME ACTION: no executor');
     if (!this._discovery) return fail(ScraperErrorTypes.Generic, 'HOME ACTION: no discovery');
+    // The earliest stage that may mutate AND has an executor: INIT still holds
+    // `mediator: none()`, so a replay attempted there silently did nothing.
+    // Still comfortably before the provider reads the cookie, which is the
+    // auth call in LOGIN.
+    await presentDeviceToken(input);
     await executeHomeNavigation(input.executor.value, this._discovery, input.logger);
     return succeed(input);
   }
@@ -125,3 +132,22 @@ function createHomePhase(): HomePhase {
 }
 
 export { createHomePhase, HomePhase };
+
+/**
+ * Present a stored device token, when this bank uses one and a token exists.
+ *
+ * Opt-in per bank via `deviceTokenCookie`; a bank that omits it pays nothing.
+ * A cold run has no token yet and simply skips, which is not an error.
+ * @param input - Sealed action context.
+ * @returns True when a token was injected.
+ */
+function presentDeviceToken(input: IActionContext): Promise<boolean> {
+  const config = resolvePipelineBankConfig(input.companyId);
+  const spec = config === false ? undefined : config.deviceTokenCookie;
+  const creds = input.credentials as { otpLongTermToken?: string };
+  const token = creds.otpLongTermToken;
+  if (spec === undefined || token === undefined) return Promise.resolve(false);
+  if (!input.executor.has) return Promise.resolve(false);
+  const injector = input.executor.value;
+  return replayDeviceToken({ injector, spec, token, logger: input.logger });
+}

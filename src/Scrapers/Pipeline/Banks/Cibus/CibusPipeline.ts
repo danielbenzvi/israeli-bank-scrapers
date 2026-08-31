@@ -64,7 +64,11 @@ function buildCibusPipeline(options: ScraperOptions): Procedure<IPipelineDescrip
     .withOptions(options)
     .withBrowser()
     .withDeclarativeLogin(CIBUS_LOGIN)
-    .withOtpTrigger()
+    // NO otp-trigger: this provider has no "send me a code" control. The code
+    // is sent by the password step itself, whose response IS the challenge
+    // (status 210). The phase therefore had nothing to detect — tolerated on a
+    // cold run, and a hard failure on a WARM one, where the device token
+    // suppresses the challenge and there is no OTP screen at all.
     // required=false: on a WARM run the device token suppresses the challenge
     // for ~30 days, so there is no code input on the page and its absence is
     // the expected state rather than a failure — the same reason Hapoalim
