@@ -191,6 +191,35 @@ export interface IPipelineBankConfig {
    * inspected — credential POSTs are never read (PII-safe by extraction scope).
    * Absent ⇒ no capture (header-token / cookie banks).
    */
+  /**
+   * Opt-in: capture a long-lived DEVICE token from the cookie jar once the
+   * one-time-code step has completed, and hand it to `onAuthFlowComplete`.
+   *
+   * A provider that offers "remember this device" issues the token as a
+   * cookie, only when the trust choice reached the server on the CODE step.
+   * Nothing on the browser login path reads the jar for it, so the token was
+   * minted and then dropped: every later run was challenged again, and an
+   * unattended scrape could never complete.
+   *
+   * The token leaves through the callback and NEVER through the scraping
+   * result — it is a credential, and the result is persisted and logged.
+   * Absent ⇒ no capture, which is every bank but the one that needs it.
+   */
+  readonly deviceTokenCookie?: {
+    /** Name prefix identifying the device cookie among the provider's own. */
+    readonly namePrefix: string;
+    /** Substring the cookie's domain must contain, so only this provider's. */
+    readonly domainMatch: string;
+    /**
+     * The exact domain to set the cookie on when replaying it.
+     *
+     * Stated rather than derived from `domainMatch`: a suffix guessed from a
+     * match substring is right until the first provider on a different TLD,
+     * and a cookie on the wrong domain is simply never sent — a silent
+     * re-challenge with nothing to see.
+     */
+    readonly cookieDomain: string;
+  };
   readonly sessionTokenCapture?: {
     /** Substring identifying the bank's post-auth API endpoint URL. */
     readonly urlMatch: string;

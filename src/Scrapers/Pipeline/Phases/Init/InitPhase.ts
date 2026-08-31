@@ -6,12 +6,14 @@
  * FINAL:  wire mediator + fetchStrategy → signal to HOME
  */
 
+import { replayDeviceToken } from '../../Mediator/Init/DeviceTokenReplay.js';
 import {
   executeLaunchBrowser,
   executeNavigateToBank,
   executeValidatePage,
   executeWireComponents,
 } from '../../Mediator/Init/InitActions.js';
+import resolvePipelineBankConfig from '../../Registry/Config/PipelineBankConfig.js';
 import { none } from '../../Types/Option.js';
 import type {
   IActionContext,
@@ -67,6 +69,9 @@ class InitPhase extends BasePhase {
     input: IActionContext,
   ): Promise<Procedure<IActionContext>> {
     input.logger.debug({ phase: this.name, message: 'init.action' });
+    // Before navigation, deliberately: a device cookie set after the page has
+    // loaded its login flow arrives too late for the provider to read it.
+    await presentDeviceToken(input);
     const bootstrap = input as IBootstrapContext;
     const full = buildFullFromBootstrap(bootstrap);
     const navResult = await executeNavigateToBank(full);
@@ -95,3 +100,22 @@ class InitPhase extends BasePhase {
 }
 
 export default InitPhase;
+
+/**
+ * Present a stored device token, when this bank uses one and a token exists.
+ *
+ * Opt-in per bank via `deviceTokenCookie`; a bank that omits it pays nothing.
+ * A cold run has no token yet and simply skips, which is not an error.
+ * @param input - Sealed action context.
+ * @returns True when a token was injected.
+ */
+function presentDeviceToken(input: IActionContext): Promise<boolean> {
+  const config = resolvePipelineBankConfig(input.companyId);
+  const spec = config === false ? undefined : config.deviceTokenCookie;
+  const creds = input.credentials as { otpLongTermToken?: string };
+  const token = creds.otpLongTermToken;
+  if (spec === undefined || token === undefined) return Promise.resolve(false);
+  if (!input.executor.has) return Promise.resolve(false);
+  const injector = input.executor.value;
+  return replayDeviceToken({ injector, spec, token, logger: input.logger });
+}

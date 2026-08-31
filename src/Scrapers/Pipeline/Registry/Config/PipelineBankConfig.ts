@@ -9,9 +9,15 @@ import { CompanyTypes } from '../../../../Definitions.js';
 import { ANGULAR_LOGIN_POLL } from '../../Mediator/Timing/LoginTimingConfig.js';
 import { calConfig } from './PipelineBankConfigCal.js';
 import { seedWkFromPipelineConfig } from './PipelineBankConfigSeeder.js';
+import {
+  ACCOUNT,
+  API_DIRECT,
+  CARD_CYCLE,
+  defineBank,
+  SESSION_COOKIE,
+  TOKEN,
+} from './PipelineBankConfigShared.js';
 import type {
-  AuthStrategyKind,
-  BalanceKind,
   IPipelineBankConfig,
 } from './PipelineBankConfigTypes.js';
 
@@ -21,43 +27,15 @@ export type {
   IPipelineBankConfig,
 } from './PipelineBankConfigTypes.js';
 
-/** Billing-cycle banks (credit-card companies) expose no account balance. */
-const CARD_CYCLE = 'card-cycle';
-
 /** Deposit/checking banks expose a real account balance resolved live. */
-const ACCOUNT = 'account';
-
 /** Banks whose completed login yields a discovered Bearer/JWT token. */
-const TOKEN = 'token';
-
-/** Banks whose completed login is carried by first-party session cookies. */
-const SESSION_COOKIE = 'session-cookie';
-
-/** API-native banks -- headless identity strategy, no browser AUTH-DISCOVERY. */
-const API_DIRECT = 'api-direct';
-
 /** Slow-AngularJS auth-confirm budget (Isracard, Amex). */
 const LOGIN_AUTH_CONFIRM_ANGULAR_MS = 45_000;
 
-/**
- * Build a plain bank config — base URL + balance/auth kinds, no
- * headless/OTP/poll blocks. Keeps the registry DRY: adding a simple
- * deposit or card bank is a single line; banks needing extra wiring
- * (Amex/Isracard poll, API-direct headless) stay object-literal.
- * @param base - Official website URL (HOME phase navigates here).
- * @param balanceKind - Balance semantics (account vs card-cycle).
- * @param authStrategyKind - Auth-completion family.
- * @returns A pipeline bank config.
- */
-function defineBank(
-  base: string,
-  balanceKind: BalanceKind,
-  authStrategyKind: AuthStrategyKind,
-): IPipelineBankConfig {
-  return { urls: { base }, balanceKind, authStrategyKind };
-}
-
 /** FIBI appsng SPA shell route — AUTH-DISCOVERY navigates here post-login. */
+/** The provider's ~30-day device token, and where it must be set to be sent. */
+const DEVICE_COOKIE = { namePrefix: 'device_', domainMatch: 'pluxee', cookieDomain: '.pluxee.co.il' };
+
 const FIBI_APPSNG_SHELL = '/appsng/Resources/PortalNG/shell/#/accountSummary';
 
 /**
@@ -97,7 +75,11 @@ const PIPELINE_BANK_CONFIG: Partial<Record<CompanyTypes, IPipelineBankConfig>> =
   // The benefit allowance, not a bank balance — ACCOUNT is still the right
   // semantics: it is a standing figure the provider reports, not a card cycle
   // that closes. Base URL is the consumer portal, which INIT navigates to.
-  [CompanyTypes.Cibus]: defineBank('https://consumers.pluxee.co.il', ACCOUNT, SESSION_COOKIE),
+  [CompanyTypes.Cibus]: {
+    ...defineBank('https://consumers.pluxee.co.il', ACCOUNT, SESSION_COOKIE),
+    // Issued only when the trust choice reaches the server on the CODE step.
+    deviceTokenCookie: DEVICE_COOKIE,
+  },
   [CompanyTypes.Discount]: defineBank('https://www.discountbank.co.il', ACCOUNT, SESSION_COOKIE),
   [CompanyTypes.Hapoalim]: defineBank('https://www.bankhapoalim.co.il', ACCOUNT, SESSION_COOKIE),
   [CompanyTypes.Massad]: fibiConfig(
