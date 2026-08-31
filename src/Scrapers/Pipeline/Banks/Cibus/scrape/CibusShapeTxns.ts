@@ -10,6 +10,24 @@
  * helper, so this bank inherits the same window semantics every other
  * month-chunked bank is tested against.
  *
+ * COVERAGE IS UNAUDITED FOR THIS BANK, and that is a known limit rather than
+ * an oversight. The coverage guard re-reads the raw response and counts rows
+ * whose keys look transactional, needing two matches from the Well-Known set.
+ * This provider offers `date` and then `price`, `rest_name`, `deal_id` — one
+ * match, below the threshold — so the guard finds nothing to compare against
+ * and says so on every chunk.
+ *
+ * Not fixed by widening that set: `price` is generic enough that the hunter
+ * would start classifying menu-shaped arrays as transactions for every other
+ * institution, and the guard's own rule is that it warns and never repairs —
+ * so the cost would be noise everywhere to cover one bank.
+ *
+ * What the guard would have caught here is the provider adding a container
+ * this step does not read. The residual risk is small — the response is a
+ * single flat `list` — and the replay gate compares against stored rows, which
+ * is what would surface a silent shortfall. Worth revisiting if this provider
+ * ever grows a second container.
+ *
  * PACED BY THE DRIVER. An earlier revision fanned every window out through
  * `Promise.all`, putting a burst of simultaneous requests on a provider that
  * scores request behaviour. Chunk-at-a-time is sequential by construction.
