@@ -13,6 +13,7 @@ import type {
   HeaderMap,
   IApiDirectScrapeShape,
 } from '../../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
+import calAmounts from './VisaCalAmounts.js';
 import {
   accountNumberOf,
   customerUrl,
@@ -65,6 +66,10 @@ const VISACAL_SHAPE: IApiDirectScrapeShape<IVisaCalCard, number> = {
   accountNumberOf,
   // A card issuer: charges arrive positive and the mapper flips them.
   isCardIssuer: true,
+  // CAL's two amount fields mean different things and coincide only on a
+  // shekel row, so this shape resolves all four money fields itself rather
+  // than letting the shared alias list guess. See VisaCalAmounts.ts.
+  amountsOf: calAmounts,
   customer: {
     buildVars: customerVars,
     extractAccounts: extractCards,

@@ -66,8 +66,8 @@ function mapAndReport<TAcct, TCursor>(
   raws: readonly object[],
   label: string,
 ): readonly ITransaction[] {
-  const { isCardIssuer, providerExtraOf, purchaseDateOf } = a.shape;
-  const mapped = mapTxns(raws, { isCardIssuer, providerExtraOf, purchaseDateOf });
+  const { isCardIssuer, providerExtraOf, purchaseDateOf, amountsOf } = a.shape;
+  const mapped = mapTxns(raws, { isCardIssuer, providerExtraOf, purchaseDateOf, amountsOf });
   reportMapRejects({ extracted: raws.length, mapped: mapped.length, label });
   return mapped;
 }

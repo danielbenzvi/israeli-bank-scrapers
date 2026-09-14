@@ -32,6 +32,7 @@ import type { IPage } from '../../Strategy/Fetch/Pagination.js';
 import type { IActionContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import type { WindowNarrowing } from '../../Types/WindowNarrowing.js';
+import type { IShapeAmounts } from './ApiDirectScrapeMapRow.js';
 
 /** Opaque headers map (shape step may declare per-call extraHeaders). */
 export type HeaderMap = Record<string, string>;
@@ -435,6 +436,28 @@ export interface IApiDirectScrapeShape<TAcct, TCursor> {
    * because only the shape knows the raw format. Absent ⇒ the coerced value.
    */
   readonly purchaseDateOf?: (row: object) => string;
+  /**
+   * The four money fields, resolved by the shape rather than the alias list.
+   *
+   * The shared auto-mapper resolves an amount by walking one ordered list of
+   * field names and taking the first present. That works while a provider's
+   * billed amount and original-currency amount are interchangeable, and fails
+   * silently when they are not: both resolve from whichever field the list
+   * reaches first, and the two values become one.
+   *
+   * It fails quietly because the two coincide on a domestic row. Only a
+   * foreign-currency row separates them, and only then does a charge get
+   * recorded in the wrong currency's units.
+   *
+   * A shape that declares this states all four together — charged, original,
+   * and both currencies — because a provider whose fields are not
+   * interchangeable needs every one of them replaced. Returning them as one
+   * value is deliberate: it makes "fix the charged amount and leave the
+   * original one reading a stale alias" impossible to express.
+   *
+   * Absent ⇒ the shared alias resolution, unchanged.
+   */
+  readonly amountsOf?: (row: object) => IShapeAmounts;
   readonly customer: IApiDirectScrapeCustomerStep<TAcct>;
   readonly balance: IApiDirectScrapeBalanceStep<TAcct>;
   readonly transactions: IApiDirectScrapeTxnsStep<TAcct, TCursor>;
