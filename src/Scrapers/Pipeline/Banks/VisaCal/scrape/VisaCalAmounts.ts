@@ -81,12 +81,41 @@ function isPending(row: ICalAmountRow): boolean {
 }
 
 /**
+ * Whether the row returns money to the household.
+ *
+ * CAL states this twice, in fields that carry it differently, and neither is
+ * reliably present:
+ *
+ *   - `amtBeforeConvAndIndex` carries an explicit minus on a credit. Observed
+ *     in a real payload (the repository's own card-sign fixture is
+ *     `{ trnAmt: 250, amtBeforeConvAndIndex: -250 }`) — note that row has NO
+ *     `trnTypeCode` at all.
+ *   - `trnTypeCode` names the kind outright, `6` being a credit. `trnAmt` is an
+ *     unsigned magnitude, so for that field the code is the only signal.
+ *
+ * Either one alone therefore misreads rows the other would get right, which is
+ * why this reads both. **An explicit minus wins**: a sign CAL took the trouble
+ * to send is stronger evidence than a code it may have omitted.
+ *
+ * <p>UNVERIFIED: no captured payload contains a real credit, so the case where
+ * the two signals actively DISAGREE — a minus with `trnTypeCode` 5 — has never
+ * been observed. It is resolved in favour of the minus on the reasoning above,
+ * not on evidence, and a replay covering a real refund is what would settle it.
+ * @param row - One CAL transaction row.
+ * @returns True when the row is a credit.
+ */
+function isCredit(row: ICalAmountRow): boolean {
+  const signedBilled = num(row.amtBeforeConvAndIndex);
+  return signedBilled < 0 || str(row.trnTypeCode) === TRN_TYPE_CREDIT;
+}
+
+/**
  * Resolve CAL's four money fields from one row.
  *
- * A credit (`trnTypeCode` 6) keeps its amounts positive; everything else is
- * money leaving the household and is returned negative. The sign comes from the
- * type code CAL sends, never from comparing the two amounts — that comparison
- * is exactly what breaks on a foreign row, where they legitimately differ.
+ * A credit keeps its amounts positive; everything else is money leaving the
+ * household and comes back negative. Direction is decided once, from both the
+ * signals CAL sends, and applied to both amounts so they cannot disagree with
+ * each other.
  * @param raw - One CAL transaction row.
  * @returns The four money fields.
  */
@@ -97,7 +126,10 @@ export function calAmounts(raw: object): ICalAmounts {
   // only figure CAL has stated.
   const billed = isPendingRow ? num(row.trnAmt) : num(row.amtBeforeConvAndIndex);
   const original = num(row.trnAmt);
-  const sign = str(row.trnTypeCode) === TRN_TYPE_CREDIT ? 1 : -1;
+  const sign = isCredit(row) ? 1 : -1;
+  // A pending row has no billing currency yet. That is a fact about the row,
+  // not a gap in what this shape knows, so it is stated as empty rather than
+  // left for the shared mapper to guess at.
   const billingCurrency = isPendingRow ? '' : str(row.debCrdCurrencySymbol);
   return {
     chargedAmount: sign * Math.abs(billed),

@@ -65,12 +65,15 @@ function withStatedAmounts(
 ): ITransaction {
   if (opts.amountsOf === undefined) return txn;
   const { chargedAmount, originalAmount, chargedCurrency, originalCurrency } = opts.amountsOf(raw);
-  // An empty currency means the provider stated none, so the mapper's own value
-  // stands rather than having one invented — inventing one is the class of
-  // guess this hook exists to remove.
+  // A shape that resolves its own money OWNS these fields, so an empty charged
+  // currency means the row has none — a pending row has not been billed yet —
+  // and the field is cleared rather than left carrying the mapper's guess.
+  //
+  // `originalCurrency` is the exception, and only because ITransaction requires
+  // a string: there is no way to say "none", so an empty value leaves the
+  // mapper's own resolution in place rather than replacing it with "".
   const original = originalCurrency === '' ? {} : { originalCurrency };
-  const charged = chargedCurrency === '' ? {} : { chargedCurrency };
-  return { ...txn, chargedAmount, originalAmount, ...charged, ...original };
+  return { ...txn, chargedAmount, originalAmount, chargedCurrency, ...original };
 }
 
 /**

@@ -64,6 +64,37 @@ describe('CAL money fields', () => {
     expect(a.originalAmount).toBe(120.5);
   });
 
+  it('reads a credit CAL signed but did not type — the shape a real payload showed', () => {
+    // From this repository's own card-sign fixture: the minus lives on
+    // amtBeforeConvAndIndex, trnAmt is an unsigned magnitude, and there is no
+    // trnTypeCode at all. Reading only the type code calls this a charge.
+    const a = calAmounts({
+      trnAmt: 250,
+      amtBeforeConvAndIndex: -250,
+      trnCurrencySymbol: '₪',
+      debCrdCurrencySymbol: '₪',
+      debCrdDate: '2026-03-02',
+    });
+    expect(a.chargedAmount).toBe(250);
+    expect(a.originalAmount).toBe(250);
+  });
+
+  it('prefers an explicit minus when the two direction signals disagree', () => {
+    // UNVERIFIED against a real payload — no capture contains a credit at all.
+    // A sign CAL took the trouble to send outranks a code it may have defaulted.
+    const a = calAmounts({ ...SETTLED_ILS, amtBeforeConvAndIndex: -120.5, trnTypeCode: '5' });
+    expect(a.chargedAmount).toBe(120.5);
+  });
+
+  it('keeps both amounts pointing the same way', () => {
+    // The two fields describe one event. Whatever decides direction must decide
+    // it once, or a row can report money in and out at the same time.
+    const a = calAmounts({ ...SETTLED_ILS, trnAmt: 25, amtBeforeConvAndIndex: -96.4 });
+    const chargedDirection = Math.sign(a.chargedAmount);
+    const originalDirection = Math.sign(a.originalAmount);
+    expect(chargedDirection).toBe(originalDirection);
+  });
+
   it('treats a standing order as money leaving, like any other non-credit', () => {
     // trnTypeCode 9 appears on 3 of 45 rows in the real capture. It is neither
     // a credit nor an instalment, and nothing should special-case it.
