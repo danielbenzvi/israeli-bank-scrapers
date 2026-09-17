@@ -21,6 +21,7 @@
  *     accounts derive purely from session-context (PayBox uId case).
  */
 
+import type { IApiMediator } from '../../Mediator/Api/ApiMediator.types.js';
 import type {
   IAesSignerConfig,
   JsonValueTemplate,
@@ -31,6 +32,7 @@ import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
 import type { IPage } from '../../Strategy/Fetch/Pagination.js';
 import type { IActionContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
+import type { IShapeAmounts } from './ApiDirectScrapeMapRow.js';
 import type { IWindowRequestPolicy } from '../../Types/WindowNarrowing.js';
 
 /** Opaque headers map (shape step may declare per-call extraHeaders). */
@@ -388,6 +390,13 @@ export interface IApiDirectScrapeBootstrapStep {
   readonly extractPatch: (args: IBootstrapExtractArgs) => Procedure<SessionContextPatch>;
 }
 
+/** What {@link IApiDirectScrapeShape.enrichRows} receives. */
+export interface IEnrichRowsContext<TAcct> {
+  readonly acct: TAcct;
+  readonly ctx: IActionContext;
+  readonly bus: IApiMediator;
+}
+
 /** Shape a bank plugs into createApiDirectScrapePhase. */
 export interface IApiDirectScrapeShape<TAcct, TCursor> {
   readonly stepName: string;
@@ -411,6 +420,22 @@ export interface IApiDirectScrapeShape<TAcct, TCursor> {
    * "not a card issuer", which is what a bank shape wants.
    */
   readonly isCardIssuer?: boolean;
+  /**
+   * Optional per-bank row enrichment, applied after extraction and BEFORE
+   * mapping, so anything it adds is visible to the mapper.
+   *
+   * Declared on the shape rather than branched on in the driver, which states
+   * zero bank-name coupling as a rule. A bank that needs a second request per
+   * transaction plugs it in here; every other shape omits it and pays nothing.
+   *
+   * Contract: MUST return every row it was given. Enrichment adds to a scrape
+   * and must never be able to subtract from it — a dropped row here would
+   * vanish from a scrape that still reports success.
+   */
+  readonly enrichRows?: (
+    rows: readonly object[],
+    context: IEnrichRowsContext<TAcct>,
+  ) => Promise<readonly object[]>;
   /**
    * Optional post-login prime navigation — see {@link IApiDirectScrapePrime}.
    * Absent ⇒ no prime (cookie-only session banks + headless banks).
@@ -439,6 +464,61 @@ export interface IApiDirectScrapeShape<TAcct, TCursor> {
    * scope-config that backs `$ref` resolution.
    */
   readonly secrets?: Readonly<Record<string, string>>;
+  /**
+   * Optional per-row provider payload, carried onto `ITransaction.providerExtra`.
+   *
+   * The shared auto-mapper populates only the fields the Well-Known dictionary
+   * can alias, and `providerExtra` is not one: it is a per-provider BAG, not a
+   * key, so no alias can reach it. A bank whose consumer needs provider values
+   * the standard fields cannot express declares them here.
+   *
+   * Cibus is the case that required it. Its rows carry the split between the
+   * employer benefit's share and the household's own, the legacy scraper always
+   * emitted it, and a consumer validates the two against the price as its only
+   * early warning that the provider changed how it splits a purchase. Without
+   * this hook the Pipeline backend dropped the split silently while reporting a
+   * complete scrape.
+   *
+   * Absent ⇒ no bag, and every existing shape is byte-identical.
+   */
+  readonly providerExtraOf?: (row: object) => Readonly<Record<string, unknown>>;
+  /**
+   * Optional per-row purchase date, stated by the shape as `YYYY-MM-DD`.
+   *
+   * The shared coercion parses a recognised format and re-emits it with
+   * `moment(...).toISOString()`, which converts local midnight to UTC. East of
+   * Greenwich that is the PREVIOUS calendar day — a 29/06 purchase became
+   * `2026-06-28T21:00:00.000Z`. Most consumers convert back through a
+   * timezone-aware key and never notice; one that keys rows on the bare date
+   * cannot, and a wrong day there does not surface as an error — it re-imports
+   * the row as a new purchase, forever.
+   *
+   * A shape that declares this keeps the calendar day the provider stated,
+   * because only the shape knows the raw format. Absent ⇒ the coerced value.
+   */
+  readonly purchaseDateOf?: (row: object) => string;
+  /**
+   * The four money fields, resolved by the shape rather than the alias list.
+   *
+   * The shared auto-mapper resolves an amount by walking one ordered list of
+   * field names and taking the first present. That works while a provider's
+   * billed amount and original-currency amount are interchangeable, and fails
+   * silently when they are not: both resolve from whichever field the list
+   * reaches first, and the two values become one.
+   *
+   * It fails quietly because the two coincide on a domestic row. Only a
+   * foreign-currency row separates them, and only then does a charge get
+   * recorded in the wrong currency's units.
+   *
+   * A shape that declares this states all four together — charged, original,
+   * and both currencies — because a provider whose fields are not
+   * interchangeable needs every one of them replaced. Returning them as one
+   * value is deliberate: it makes "fix the charged amount and leave the
+   * original one reading a stale alias" impossible to express.
+   *
+   * Absent ⇒ the shared alias resolution, unchanged.
+   */
+  readonly amountsOf?: (row: object) => IShapeAmounts;
   readonly customer: IApiDirectScrapeCustomerStep<TAcct>;
   readonly balance: IApiDirectScrapeBalanceStep<TAcct>;
   readonly transactions: IApiDirectScrapeTxnsStep<TAcct, TCursor>;

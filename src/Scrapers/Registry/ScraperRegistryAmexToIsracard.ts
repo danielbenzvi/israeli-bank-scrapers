@@ -2,6 +2,7 @@ import { CompanyTypes } from '../../Definitions.js';
 import { type IScraper, type ScraperCredentials, type ScraperOptions } from '../Base/Interface.js';
 import BehatsdaaScraper from '../Behatsdaa/BehatsdaaScraper.js';
 import BeyahadBishvilhaScraper from '../BeyahadBishvilha/BeyahadBishvilhaScraper.js';
+import CibusScraper from '../Cibus/CibusScraper.js';
 
 /** IScraper factory function type. */
 export type ScraperFactory = (options: ScraperOptions) => IScraper<ScraperCredentials>;
@@ -23,6 +24,12 @@ const SCRAPER_REGISTRY_AMEX_TO_ISRACARD: Partial<Record<CompanyTypes, ScraperFac
    * @returns BeyahadBishvilha scraper instance.
    */
   [CompanyTypes.BeyahadBishvilha]: options => new BeyahadBishvilhaScraper(options),
+  /**
+   * Create a Cibus (Pluxee) scraper.
+   * @param options - Scraper configuration options.
+   * @returns Cibus scraper instance.
+   */
+  [CompanyTypes.Cibus]: options => new CibusScraper(options),
 };
 
 export default SCRAPER_REGISTRY_AMEX_TO_ISRACARD;

@@ -3,6 +3,7 @@
  */
 
 import type { ILoginConfig } from '../../../../../Scrapers/Base/Interfaces/Config/LoginConfig.js';
+import ScraperError from '../../../../../Scrapers/Base/ScraperError.js';
 import {
   buildLoginPhase,
   buildScrapePhase,
@@ -10,6 +11,7 @@ import {
   resolveScrapeExec,
 } from '../../../../../Scrapers/Pipeline/Core/Builder/StepResolvers.js';
 import type { IApiDirectScrapeShape } from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
+import type { BasePhase } from '../../../../../Scrapers/Pipeline/Phases/Base/BasePhase.js';
 import type { IPage } from '../../../../../Scrapers/Pipeline/Strategy/Fetch/Pagination.js';
 import type {
   IActionContext,
@@ -107,10 +109,23 @@ function makeAdsShape(): IApiDirectScrapeShape<ISynAcct, string> {
   };
 }
 
+
+/**
+ * The single phase a slot produced, for the slots that produce exactly one.
+ * @param built - What the factory returned.
+ * @returns The one phase.
+ */
+function onlyPhase(built: ReturnType<typeof buildLoginPhase>): BasePhase {
+  const list = Array.isArray(built) ? built : [built as BasePhase];
+  if (list.length !== 1) throw new ScraperError(`expected one phase, got ${String(list.length)}`);
+  return list[0] as BasePhase;
+}
+
 describe('buildLoginPhase', () => {
   it('builds a declarative phase from loginConfig when present', () => {
     const makeStateResult1 = makeState({ loginConfig: MINIMAL_CONFIG });
-    const phase = buildLoginPhase(makeStateResult1);
+    const builtPhase = buildLoginPhase(makeStateResult1);
+    const phase = onlyPhase(builtPhase);
     expect(phase.name).toBe('login');
   });
 
@@ -128,7 +143,8 @@ describe('buildLoginPhase', () => {
       return succeed(ctx);
     };
     const state = makeState({ loginConfig: false, loginFn });
-    const phase = buildLoginPhase(state);
+    const builtPhase = buildLoginPhase(state);
+    const phase = onlyPhase(builtPhase);
     expect(phase.name).toBe('login');
     // Execute the phase's action to hit the wrapped login fn
     const ctx = makeMockContext();
@@ -140,7 +156,8 @@ describe('buildLoginPhase', () => {
 
   it('builds SimplePhase using DECLARATIVE_LOGIN_STEP when hasOtpFill=true', () => {
     const state = makeState({ hasOtpFill: true, loginMode: 'native' });
-    const phase = buildLoginPhase(state);
+    const builtPhase = buildLoginPhase(state);
+    const phase = onlyPhase(builtPhase);
     expect(phase.name).toBe('login');
   });
 
@@ -148,7 +165,8 @@ describe('buildLoginPhase', () => {
     const modes: IBuilderState['loginMode'][] = ['declarative', 'directPost', 'native'];
     for (const mode of modes) {
       const makeStateResult2 = makeState({ loginMode: mode });
-      const phase = buildLoginPhase(makeStateResult2);
+      const builtPhase = buildLoginPhase(makeStateResult2);
+    const phase = onlyPhase(builtPhase);
       expect(phase.name).toBe('login');
     }
   });

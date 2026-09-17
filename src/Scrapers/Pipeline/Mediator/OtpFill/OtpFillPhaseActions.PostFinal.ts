@@ -5,14 +5,16 @@
  */
 
 import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
+import resolvePipelineBankConfig from '../../Registry/Config/PipelineBankConfig.js';
 import { maskVisibleText } from '../../Types/LogEvent.js';
 import type { IPipelineContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, succeed } from '../../Types/Procedure.js';
 import type { IElementMediator } from '../Elements/ElementMediator.js';
 import { traceResolution } from '../Elements/ResolutionTrace.js';
-import { detectOtpError, detectOtpForm } from '../Form/OtpProbe.js';
+import { detectOtpError, detectOtpForm, detectOtpSplitField } from '../Form/OtpProbe.js';
 import { OTP_FALLBACK, unwrapProbe } from '../Otp/OtpShared.js';
+import { type AuthFlowCallback, captureDeviceToken } from './OtpDeviceToken.js';
 
 /** Procedure alias keeping single-line signatures. */
 type PostProc = Procedure<IPipelineContext>;
@@ -44,7 +46,32 @@ async function isOtpFormStillPresent(
 ): Promise<boolean> {
   const mfaResult = unwrapProbe(await detectOtpForm(mediator).catch(OTP_FALLBACK));
   traceResolution(logger, 'OTP_FILL.POST re-probe', mfaResult);
-  return mfaResult.found;
+  if (mfaResult.found) return true;
+  return isSplitFieldStillPresent(mediator, logger);
+}
+
+/**
+ * Re-probe a SPLIT code field, which the single-input probe cannot see.
+ *
+ * Probed on the visible boxes rather than a hidden whole-code input: the
+ * hidden field survives in the DOM after a successful login, so matching it
+ * reported an accepted code as a rejection. The boxes go with the form.
+ *
+ * Without this, a submit that never fired — the code filled, the button
+ * enabled, and the click lost — passed POST silently and surfaced later as a
+ * refused data call, having spent a one-time code to get there.
+ * @param mediator - Element mediator.
+ * @param logger - Pipeline logger.
+ * @returns True iff the split code field is still on the page.
+ */
+async function isSplitFieldStillPresent(
+  mediator: IElementMediator,
+  logger: IPipelineContext['logger'],
+): Promise<boolean> {
+  const probe = await detectOtpSplitField(mediator).catch(OTP_FALLBACK);
+  const result = unwrapProbe(probe);
+  traceResolution(logger, 'OTP_FILL.POST split re-probe', result);
+  return result.found;
 }
 
 /**
@@ -114,6 +141,26 @@ function succeedWithDiag(input: IPipelineContext, action: string): PostProc {
 }
 
 /**
+ * Hand a captured device token to the consumer, when this bank declares one.
+ *
+ * Opt-in per bank via `deviceTokenCookie`; a bank that omits it pays nothing
+ * and behaves exactly as before.
+ * @param input - Pipeline context.
+ * @param mediator - Element mediator, for the cookie jar.
+ * @returns True when a token was handed over.
+ */
+async function handOverDeviceToken(
+  input: IPipelineContext,
+  mediator: IElementMediator,
+): Promise<boolean> {
+  const config = resolvePipelineBankConfig(input.companyId);
+  const spec = config === false ? undefined : config.deviceTokenCookie;
+  const { onAuthFlowComplete } = input.options as { onAuthFlowComplete?: AuthFlowCallback };
+  if (spec === undefined || onAuthFlowComplete === undefined) return false;
+  return captureDeviceToken({ input, mediator, spec, callback: onAuthFlowComplete });
+}
+
+/**
  * FINAL: Prove dashboard loaded — cookie audit + log snapshot.
  * @param input - Pipeline context.
  * @returns Updated context with diagnostics.
@@ -121,6 +168,9 @@ function succeedWithDiag(input: IPipelineContext, action: string): PostProc {
 async function executeFillFinal(input: IPipelineContext): Promise<PostProc> {
   if (!input.mediator.has) return succeedWithDiag(input, 'otp-fill-final (no mediator)');
   const mediator = input.mediator.value;
+  // Here, because this is the first moment the token can exist: the provider
+  // issues it on the CODE step, and only when the trust choice went with it.
+  await handOverDeviceToken(input, mediator);
   const cookieCount = await countCookies(mediator);
   const currentUrl = mediator.getCurrentUrl();
   logFillFinalState(input.logger, cookieCount, currentUrl);

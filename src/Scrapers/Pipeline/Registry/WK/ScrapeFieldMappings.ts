@@ -222,6 +222,20 @@ export const PIPELINE_WELL_KNOWN_TXN_FIELDS = {
     'israelAbroadVouchersList',
   ],
   direction: ['creditDebit', 'direction', 'debitCreditIndicator'],
+  /**
+   * Fields whose NUMERIC code marks an outbound (money-leaving) movement.
+   *
+   * Some banks do not describe direction in words at all: Hapoalim reports
+   * `eventAmount` as a positive magnitude and marks direction with
+   * `eventActivityTypeCode` (1 inbound, 2 outbound). The string-matching
+   * `direction` list above can never match a number, so every payment, card
+   * settlement and mortgage instalment came through POSITIVE — money leaving
+   * the account recorded as money arriving.
+   *
+   * Which VALUE means outbound is a fact about the field's contents, not its
+   * name, so it lives beside the sign logic rather than in this registry.
+   */
+  outboundCodeFields: ['eventActivityTypeCode'],
   ...PROVIDER_ANNOTATION_FIELDS,
   voidIndicators: ['dealSumType'],
   voucherFields: ['voucherNumberRatz', 'voucherNumberRatzOutbound'],

@@ -13,6 +13,7 @@
 import type { ILoginConfig } from '../../../Scrapers/Base/Interfaces/Config/LoginConfig.js';
 import { AMEX_LOGIN } from '../../../Scrapers/Pipeline/Banks/Amex/AmexPipeline.js';
 import { BEINLEUMI_LOGIN } from '../../../Scrapers/Pipeline/Banks/Beinleumi/BeinleumiPipeline.js';
+import { CIBUS_LOGIN } from '../../../Scrapers/Pipeline/Banks/Cibus/CibusPipeline.js';
 import { DISCOUNT_LOGIN } from '../../../Scrapers/Pipeline/Banks/Discount/DiscountPipeline.js';
 import { HAPOALIM_LOGIN } from '../../../Scrapers/Pipeline/Banks/Hapoalim/HapoalimPipeline.js';
 import { ISRACARD_LOGIN } from '../../../Scrapers/Pipeline/Banks/Isracard/IsracardPipeline.js';
@@ -34,6 +35,7 @@ import { YAHAV_LOGIN } from '../../../Scrapers/Pipeline/Banks/Yahav/YahavPipelin
 const BANK_LOGIN_CONFIGS: Readonly<Partial<Record<string, ILoginConfig>>> = {
   amex: AMEX_LOGIN,
   beinleumi: BEINLEUMI_LOGIN,
+  cibus: CIBUS_LOGIN,
   discount: DISCOUNT_LOGIN,
   hapoalim: HAPOALIM_LOGIN,
   isracard: ISRACARD_LOGIN,

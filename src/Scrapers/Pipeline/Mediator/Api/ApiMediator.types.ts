@@ -5,7 +5,7 @@
 import type { CompanyTypes } from '../../../../Definitions.js';
 import type { WKQueryOperation } from '../../Registry/WK/QueriesWK.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
-import type { IFetchStrategy } from '../../Strategy/Fetch/FetchStrategy.js';
+import type { IFetchStrategy, IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { GraphQLFetchStrategy } from '../../Strategy/Fetch/GraphQLFetchStrategy.js';
 import type { IApiQueryOpts } from '../../Types/Domain/ApiQueryOpts.js';
 import type { ITokenContext } from '../../Types/Domain/TokenContext.js';
@@ -56,6 +56,16 @@ interface IApiMediator {
     opts?: IApiQueryOpts,
   ) => Promise<Procedure<T>>;
   apiGet: <T>(wkUrl: WKUrlOrLiteral) => Promise<Procedure<T>>;
+  /**
+   * POST returning transport metadata alongside the body, for callers that
+   * must tell a challenge or an expired session apart from an empty result.
+   * Fails when the configured strategy cannot observe that metadata.
+   */
+  apiPostWithMetadata?: (
+    wkUrl: WKUrlOrLiteral,
+    body: Record<string, unknown>,
+    opts?: IApiQueryOpts,
+  ) => Promise<Procedure<IPostWithMetadata>>;
   apiQuery: <T>(
     wkQuery: WKQueryOperation,
     variables: Record<string, unknown>,
@@ -69,34 +79,6 @@ interface IApiMediatorDeps {
   readonly bankHint: CompanyTypes;
   readonly fetchStrategy: IFetchStrategy;
   readonly graphqlStrategy: GraphQLFetchStrategy;
-}
-
-/** Args for firePost — bundled to satisfy the 3-parameter ceiling. */
-interface IFirePostArgs {
-  readonly deps: IApiMediatorDeps;
-  readonly url: string;
-  readonly body: Record<string, unknown>;
-  readonly rawAuth: string;
-  readonly extraHeaders: Record<string, string>;
-  readonly query: Record<string, string>;
-  readonly onSetCookie?: (setCookies: readonly string[]) => number;
-}
-
-/** Args for fireGet — bundled so extraHeaders (HMAC) fit the 3-param ceiling. */
-interface IFireGetArgs {
-  readonly deps: IApiMediatorDeps;
-  readonly url: string;
-  readonly rawAuth: string;
-  readonly extraHeaders: Record<string, string>;
-}
-
-/** Args for fireQuery — bundled to satisfy the 3-parameter ceiling. */
-interface IFireQueryArgs {
-  readonly deps: IApiMediatorDeps;
-  readonly queryString: string;
-  readonly variables: Record<string, unknown>;
-  readonly rawAuth: string;
-  readonly extraHeaders: Record<string, string>;
 }
 
 /** Mutable mediator state isolated from the public interface. */
@@ -161,7 +143,9 @@ type IRecoveryMethods = Pick<
 >;
 
 /** Picked subset of `IApiMediator` produced by `buildCallMethods`. */
-type ICallMethods = Pick<IApiMediator, 'apiPost' | 'apiGet' | 'apiQuery'>;
+type ICallMethods = Required<
+  Pick<IApiMediator, 'apiPost' | 'apiGet' | 'apiQuery' | 'apiPostWithMetadata'>
+>;
 
 /** Args bundle for the headless-mediator factory — re-exported from {@link IHeadlessMediatorArgs}. */
 // (definitions live in ./ApiMediator.headless.types.ts to keep this file ≤150 LoC)
@@ -182,9 +166,6 @@ export type {
   IApiQueryOpArgs,
   IAuthMethods,
   ICallMethods,
-  IFireGetArgs,
-  IFirePostArgs,
-  IFireQueryArgs,
   IGraphQLEnvelope,
   IGraphQLError,
   IMediatorState,

@@ -2,6 +2,7 @@ import { CompanyTypes } from '../../../Definitions.js';
 import type { PipelineFactory } from '../Core/PipelineDescriptor.js';
 import { buildAmexPipeline } from './Amex/AmexPipeline.js';
 import { buildBeinleumiPipeline } from './Beinleumi/BeinleumiPipeline.js';
+import { buildCibusPipeline } from './Cibus/CibusPipeline.js';
 import { buildDiscountPipeline } from './Discount/DiscountPipeline.js';
 import { buildHapoalimPipeline } from './Hapoalim/HapoalimPipeline.js';
 import { buildIsracardPipeline } from './Isracard/IsracardPipeline.js';
@@ -17,6 +18,7 @@ import { buildMaxPipeline } from './Max/MaxPipeline.js';
 const PIPELINE_REGISTRY_AMEX_TO_MAX: Partial<Record<CompanyTypes, PipelineFactory>> = {
   [CompanyTypes.Amex]: buildAmexPipeline,
   [CompanyTypes.Beinleumi]: buildBeinleumiPipeline,
+  [CompanyTypes.Cibus]: buildCibusPipeline,
   [CompanyTypes.Discount]: buildDiscountPipeline,
   [CompanyTypes.Hapoalim]: buildHapoalimPipeline,
   [CompanyTypes.Isracard]: buildIsracardPipeline,

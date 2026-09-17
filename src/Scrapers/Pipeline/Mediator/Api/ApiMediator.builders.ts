@@ -11,9 +11,10 @@
 
 import type { WKQueryOperation } from '../../Registry/WK/QueriesWK.js';
 import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
+import type { IPostWithMetadata } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { ITokenContext } from '../../Types/Domain/TokenContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
-import { apiGetOp, apiPostOp, apiQueryOp } from './ApiMediator.ops.js';
+import { apiGetOp, apiPostOp, apiPostWithMetadataOp, apiQueryOp } from './ApiMediator.ops.js';
 import { buildRecoveryMethods } from './ApiMediator.recovery.js';
 import {
   getSessionContextOp,
@@ -151,6 +152,19 @@ function bindApiPost(ctx: IApiCallContext): ICallMethods['apiPost'] {
 }
 
 /**
+ * Bind the apiPostWithMetadata invocation to the given per-call context.
+ * @param ctx - Per-call context.
+ * @returns Bound `apiPostWithMetadata` callable.
+ */
+function bindApiPostWithMetadata(ctx: IApiCallContext): ICallMethods['apiPostWithMetadata'] {
+  return async (
+    wkUrl: WKUrlOrLiteral,
+    body: Record<string, unknown>,
+    opts?: IApiQueryOpts,
+  ): Promise<Procedure<IPostWithMetadata>> => apiPostWithMetadataOp({ ctx, wkUrl, body, opts });
+}
+
+/**
  * Bind the apiGet invocation to the given per-call context.
  * @param ctx - Per-call context.
  * @returns Bound `apiGet` callable.
@@ -180,6 +194,7 @@ function bindApiQuery(ctx: IApiCallContext): ICallMethods['apiQuery'] {
 function buildCallMethods(ctx: IApiCallContext): ICallMethods {
   return {
     apiPost: bindApiPost(ctx),
+    apiPostWithMetadata: bindApiPostWithMetadata(ctx),
     apiGet: bindApiGet(ctx),
     apiQuery: bindApiQuery(ctx),
   };

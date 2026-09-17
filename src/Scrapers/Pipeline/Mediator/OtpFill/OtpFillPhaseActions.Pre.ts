@@ -17,6 +17,7 @@ import { traceResolution } from '../Elements/ResolutionTrace.js';
 import { detectOtpForm, detectOtpSubmit } from '../Form/OtpProbe.js';
 import { OTP_FALLBACK, unwrapProbe } from '../Otp/OtpShared.js';
 import extractDeepPhoneHint from './OtpFillPhaseActions.PhoneHint.js';
+import { discoverSplitBoxes, type IOtpFormTargets, OTP_SPLIT_BOXES_KEY } from './OtpSplitBoxes.js';
 
 /**
  * Build the OTP-FILL emit by COPYING the predecessor's
@@ -166,6 +167,7 @@ interface ICommitFillPreArgs {
   readonly page: Page;
   readonly probes: IFillTargetsResult;
   readonly phoneHint: string;
+  readonly splitBoxes: IOtpFormTargets;
 }
 
 /** Bundled inner-args for {@link buildFillPreDiag}. */
@@ -173,6 +175,7 @@ interface IFillPreDiagArgs {
   readonly label: string;
   readonly probes: IFillTargetsResult;
   readonly phoneHint: string;
+  readonly splitBoxes: IOtpFormTargets;
 }
 
 /** Shape alias for the PRE diagnostics record. */
@@ -189,6 +192,7 @@ function buildFillPreDiag(input: IPipelineContext, args: IFillPreDiagArgs): Fill
     otpInputTarget: args.probes.inputTarget,
     otpSubmitTarget: args.probes.submitTarget,
     otpPhoneHint: args.phoneHint,
+    [OTP_SPLIT_BOXES_KEY]: args.splitBoxes,
   };
   return { ...input.diagnostics, lastAction: args.label, ...extras };
 }
@@ -209,9 +213,9 @@ function formatFillPreLabel(probes: IFillTargetsResult): string {
  * @returns Succeed with stamped diagnostics + emitted `otpFill`.
  */
 function commitFillPre(input: IPipelineContext, args: ICommitFillPreArgs): PreProc {
-  const { probes, phoneHint, page } = args;
+  const { probes, phoneHint, page, splitBoxes } = args;
   const label = formatFillPreLabel(probes);
-  const diag = buildFillPreDiag(input, { label, probes, phoneHint });
+  const diag = buildFillPreDiag(input, { label, probes, phoneHint, splitBoxes });
   const otpFillEmit: IOtpFill = { urlBeforeSubmit: page.url() };
   return succeed({ ...input, diagnostics: diag, otpFill: some(otpFillEmit) });
 }
@@ -235,10 +239,12 @@ type FillPreResult = Promise<PreProc>;
 async function probeAndCommitFillPre(args: IProbeAndCommitArgs): FillPreResult {
   const { input, mediator, page, isRequired } = args;
   const probes = await probeOtpFillTargets({ mediator, page, logger: input.logger });
-  if (!probes.hasInput) return handleMissingOtpInput(input, isRequired);
+  const splitBoxes = await discoverSplitBoxes({ mediator, page });
+  const hasField = probes.hasInput || splitBoxes.boxes.length > 0;
+  if (!hasField) return handleMissingOtpInput(input, isRequired);
   const phoneHint = await extractDeepPhoneHint(input);
   input.logger.debug({ message: formatFillPreDebug(probes, phoneHint) });
-  return commitFillPre(input, { page, probes, phoneHint });
+  return commitFillPre(input, { page, probes, phoneHint, splitBoxes });
 }
 
 /**
