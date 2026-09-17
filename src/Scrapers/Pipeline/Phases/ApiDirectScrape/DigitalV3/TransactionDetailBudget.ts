@@ -11,6 +11,8 @@
  * way.
  */
 
+import type { Brand } from '../../../Types/Brand.js';
+
 /** Caller-supplied limits for one enrichment pass. */
 export interface IDetailBudgetLimits {
   /** Most detail requests to issue in one pass. */
@@ -68,6 +70,9 @@ export function nextDetailRequest(
   return { proceed: true, delayMs };
 }
 
+/** Whether one more detail attempt fits inside the pass's wall-clock budget. */
+export type RetryFits = Brand<boolean, 'RetryFits'>;
+
 /**
  * Whether a retry still fits, after a request already failed.
  *
@@ -79,6 +84,6 @@ export function nextDetailRequest(
  * @param elapsedMs - Wall-clock milliseconds already spent.
  * @returns True when one more attempt fits.
  */
-export function retryFits(limits: IDetailBudgetLimits, elapsedMs: number): boolean {
-  return elapsedMs + limits.minDelayMs + limits.timeoutMs <= limits.maxWallMs;
+export function retryFits(limits: IDetailBudgetLimits, elapsedMs: number): RetryFits {
+  return (elapsedMs + limits.minDelayMs + limits.timeoutMs <= limits.maxWallMs) as RetryFits;
 }

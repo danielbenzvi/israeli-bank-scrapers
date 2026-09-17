@@ -13,6 +13,7 @@
  * reported through `balance`.
  */
 
+import type { Brand } from '../../../Types/Brand.js';
 import type { ITransaction, ITransactionsAccount } from '../../../../../Transactions.js';
 import { TransactionStatuses, TransactionTypes } from '../../../../../Transactions.js';
 import type { ScraperOptions } from '../../../../Base/Interface.js';
@@ -112,7 +113,7 @@ function isCalendarRange(day: string, month: string): boolean {
  * @param raw - The provider's date string.
  * @returns The same day as an ISO date string.
  */
-export function toIsoDate(raw: string): string {
+export function toIsoDate(raw: string): CibusIsoDate {
   const value = raw.trim();
   const match = PROVIDER_DATE_RE.exec(value);
   if (!match) throw new ScraperError(`Cibus: unrecognised date format '${value}'`);
@@ -120,7 +121,7 @@ export function toIsoDate(raw: string): string {
   if (!isCalendarRange(day, month)) {
     throw new ScraperError(`Cibus: date out of calendar range '${value}'`);
   }
-  return `${year}-${month}-${day}`;
+  return `${year}-${month}-${day}` as CibusIsoDate;
 }
 
 /** How the provider marks a row that should not count toward spend. */
@@ -143,13 +144,19 @@ export function readActivity(value: unknown): DealActivity {
   return 'unknown';
 }
 
+/** A date this module has proven is a real calendar day in ISO form. */
+export type CibusIsoDate = Brand<string, 'CibusIsoDate'>;
+
+/** Whether a row counts toward spend, as this module decided it. */
+export type CountableDeal = Brand<boolean, 'CountableDeal'>;
+
 /**
  * A row counts only when the provider positively said it is live.
  * @param deal - A raw purchase row.
  * @returns True when the row should count toward spend.
  */
-export function isCountable(deal: ICibusDeal): boolean {
-  return readActivity(deal.is_active) === 'live';
+export function isCountable(deal: ICibusDeal): CountableDeal {
+  return (readActivity(deal.is_active) === 'live') as CountableDeal;
 }
 
 /** Rows split by whether they count, with the unrecognised ones counted separately. */
