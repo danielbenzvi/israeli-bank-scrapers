@@ -11,7 +11,7 @@ import type { ITransaction } from '../../../../Transactions.js';
 import type { IWindowCoverage } from '../../../../WindowCoverage.js';
 import { reportMapRejects } from '../../Mediator/Scrape/CoverageAudit/MapRejects.js';
 import { classifyWindowCoverage } from '../../Mediator/Scrape/CoverageAudit/WindowCoverageVerdict.js';
-import { autoMapTransaction } from '../../Mediator/Scrape/ScrapeAutoMapper.js';
+import { type IMapTxnsOpts, mapOne } from './ApiDirectScrapeMapRow.js';
 import { applyStartWindow } from '../../Mediator/Scrape/StartWindow.js';
 import { collapseDuplicates } from '../../Mediator/Scrape/TxnDedup.js';
 import type { Procedure } from '../../Types/Procedure.js';
@@ -20,14 +20,14 @@ import { collectAccountRows } from './ApiDirectScrapeBackfill.js';
 import type { IAcctCtx } from './ApiDirectScrapeDispatchArgs.js';
 
 /**
- * Map raw rows through autoMapTransaction (drops rejects).
- * @param raws - Raw rows emitted by the shape's extractPage.
- * @param isCardIssuer - Declared by the shape; decides charge-sign handling.
- * @returns Mapped ITransactions (rejects filtered out).
+ * Map raw rows through the shape-aware mapper (drops rejects).
+ * @param raws - Raw rows from the shape's extractPage.
+ * @param opts - Shape-declared mapping options.
+ * @returns Mapped ITransactions.
  */
-function mapTxns(raws: readonly object[], isCardIssuer?: boolean): readonly ITransaction[] {
+function mapTxns(raws: readonly object[], opts: IMapTxnsOpts): readonly ITransaction[] {
   const widened = raws as unknown as readonly Record<string, unknown>[];
-  const mapped = widened.map((raw): ITransaction | false => autoMapTransaction(raw, isCardIssuer));
+  const mapped = widened.map((raw): ITransaction | false => mapOne(raw, opts));
   return mapped.filter((t): t is ITransaction => t !== false);
 }
 
@@ -48,7 +48,8 @@ function mapAndReport<TAcct, TCursor>(
   raws: readonly object[],
   label: string,
 ): readonly ITransaction[] {
-  const mapped = mapTxns(raws, a.shape.isCardIssuer);
+  const { isCardIssuer, providerExtraOf, purchaseDateOf, amountsOf } = a.shape;
+  const mapped = mapTxns(raws, { isCardIssuer, providerExtraOf, purchaseDateOf, amountsOf });
   const rejects = reportMapRejects({ extracted: raws.length, mapped: mapped.length, label });
   a.ledger.noteWhen('mappingRejectedRows', rejects.rejected > 0);
   return mapped;
@@ -102,10 +103,16 @@ export async function fetchAccountTxns<TAcct, TCursor>(
   const collected = await collectAccountRows(a);
   if (!isOk(collected)) return collected;
   const got = collected.value;
+  // Enrichment runs on the raw rows, before mapping, so anything it adds is
+  // visible to the mapper. Shapes that declare no hook pay nothing.
+  const rows =
+    a.shape.enrichRows === undefined
+      ? got.rows
+      : await a.shape.enrichRows(got.rows, { acct: a.acct, ctx: a.ctx, bus: a.bus });
   // After refineTxns on purpose: the mapper and the de-duplicator can still
   // reject rows the walk counted, and those rejects are caveats the verdict
   // has to see. Classifying before them would publish a stale confidence.
-  const txns = refineTxns(a, got.rows);
+  const txns = refineTxns(a, rows);
   const caveats = a.ledger.caveats();
   const windowCoverage = classifyWindowCoverage({ ...got.window, caveats });
   return succeed({ txns, backfillExhausted: got.isBackfillExhausted, windowCoverage });

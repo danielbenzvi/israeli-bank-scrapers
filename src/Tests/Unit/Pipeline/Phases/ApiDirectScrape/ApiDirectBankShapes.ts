@@ -14,6 +14,7 @@
 
 export { AMEX_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/Amex/scrape/AmexShape.js';
 export { BEINLEUMI_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/Beinleumi/scrape/BeinleumiShape.js';
+export { CIBUS_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/Cibus/scrape/CibusShape.js';
 export { DISCOUNT_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/Discount/scrape/DiscountShape.js';
 export { HAPOALIM_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/Hapoalim/scrape/HapoalimShape.js';
 export { ISRACARD_SHAPE } from '../../../../../Scrapers/Pipeline/Banks/Isracard/scrape/IsracardShape.js';

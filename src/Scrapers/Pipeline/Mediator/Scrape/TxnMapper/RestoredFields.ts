@@ -2,6 +2,7 @@ import type { ITransaction } from '../../../../../Transactions.js';
 import { TransactionStatuses, TransactionTypes } from '../../../../../Transactions.js';
 import { PIPELINE_WELL_KNOWN_TXN_FIELDS as WK } from '../../../Registry/WK/ScrapeWK.js';
 import { type ApiRecord } from '../AutoMapperFacade/AutoMapperTypes.js';
+import resolveRowProvenance from './RowProvenance.js';
 
 /**
  * Provider fields the shared auto-mapper cannot reach by aliasing alone.
@@ -34,6 +35,12 @@ import { type ApiRecord } from '../AutoMapperFacade/AutoMapperTypes.js';
  * - `status`, read from a provider's own provisional-row marker, or inferred
  *   from what the row omits.
  * - `type`, which follows from whether ordinals resolved.
+ * - `rawTransaction`, which no alias can reach because it is not a provider
+ *   key at all: it is whatever the bank's own shape recorded about the row
+ *   while merging response containers, plus whatever a per-transaction detail
+ *   pass made of it. Every legacy scraper populates this field and the
+ *   Pipeline auto-mapper never did, which is the same gap as the rest of this
+ *   module. Resolved by {@link resolveRowProvenance}.
  *
  * Misses are reported as `false` rather than `undefined`, per the pipeline's
  * own miss-sentinel convention.
@@ -323,6 +330,22 @@ function resolveType(
 }
 
 /**
+ * Attach whatever the bank's own shape recorded about this row.
+ *
+ * Absent when the shape recorded nothing, so the key stays off the mapped
+ * transaction entirely rather than present and undefined — a row nothing
+ * annotated maps to exactly what it mapped to before.
+ * @param raw - Raw transaction record.
+ * @param restored - The fields resolved from the provider payload.
+ * @returns Those fields, plus `rawTransaction` when there was any.
+ */
+function withRowProvenance(raw: ApiRecord, restored: Partial<ITransaction>): Partial<ITransaction> {
+  const provenance = resolveRowProvenance(raw);
+  if (provenance === false) return restored;
+  return { ...restored, rawTransaction: provenance };
+}
+
+/**
  * Fields the auto-mapper can recover from the provider record.
  *
  * Spread over the mapped transaction, so every key it omits leaves the
@@ -339,5 +362,6 @@ export default function restoreProviderFields(
   const state = rowState(raw);
   const memo = resolveMemo(raw);
   const type = resolveType(state.installments, fallbackType);
-  return memo === false ? { ...state, type } : { ...state, memo, type };
+  const restored = memo === false ? { ...state, type } : { ...state, memo, type };
+  return withRowProvenance(raw, restored);
 }

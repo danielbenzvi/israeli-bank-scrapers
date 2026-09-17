@@ -160,8 +160,34 @@ describe('AmexShape transactions', () => {
     };
     const ctx = ctxWith(new Date(2000, 0, 1), 0);
     const page = txnsExtractPage({ body, cursor: false, acct: CARD, ctx });
-    expect(page.items).toEqual([{ id: 'a1' }, { id: 'v1' }, { id: 'v2' }]);
+    // Rows now carry which container they came from — once merged, an
+    // approval (pending authorisation) is otherwise indistinguishable from a
+    // voucher (settled charge). Provider fields are untouched.
+    expect(page.items).toEqual([
+      { id: 'a1', __rowProvenance: { rowClass: 'approval' } },
+      { id: 'v1', __rowProvenance: { rowClass: 'voucher' } },
+      { id: 'v2', __rowProvenance: { rowClass: 'voucher' } },
+    ]);
     expect(page.nextCursor).toBe(1);
+  });
+
+  it('txnsExtractPage tags an out-of-statement charge as its own row class', () => {
+    // A third container upstream merges in: charges settled OUTSIDE the
+    // statement cycle. It is neither a pending authorisation nor an
+    // in-statement voucher, so folding it into either would misreport its
+    // settlement state to any consumer reading provenance.
+    const body = {
+      data: {
+        israelAbroadVouchers: {
+          outOfStatementChargeDateVouchers: [
+            { immediateVouchersCurrencyDate: [{ id: 'o1' }] },
+          ],
+        },
+      },
+    };
+    const ctx = ctxWith(new Date(2000, 0, 1), 0);
+    const page = txnsExtractPage({ body, cursor: false, acct: CARD, ctx });
+    expect(page.items).toEqual([{ id: 'o1', __rowProvenance: { rowClass: 'outOfStatement' } }]);
   });
 
   it('txnsExtractPage tolerates a null data block', () => {

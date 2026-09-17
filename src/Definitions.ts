@@ -22,6 +22,7 @@ export enum CompanyTypes {
   Pagi = 'pagi',
   PayBox = 'payBox',
   Pepper = 'pepper',
+  Cibus = 'cibus',
 }
 
 export const SCRAPERS = {
@@ -88,6 +89,10 @@ export const SCRAPERS = {
   [CompanyTypes.Behatsdaa]: {
     name: 'Behatsdaa',
     loginFields: ['id', PASSWORD_FIELD],
+  },
+  [CompanyTypes.Cibus]: {
+    name: 'Cibus (Pluxee)',
+    loginFields: ['username', PASSWORD_FIELD],
   },
   [CompanyTypes.Pagi]: {
     name: 'Pagi',

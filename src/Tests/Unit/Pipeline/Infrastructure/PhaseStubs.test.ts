@@ -67,6 +67,7 @@ describe('PipelineRegistry', () => {
     const keys = Object.keys(PIPELINE_REGISTRY);
     expect(keys).toContain('amex');
     expect(keys).toContain('beinleumi');
+    expect(keys).toContain('cibus');
     expect(keys).toContain('discount');
     expect(keys).toContain('hapoalim');
     expect(keys).toContain('isracard');
