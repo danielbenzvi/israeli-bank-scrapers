@@ -8,6 +8,7 @@
  * `enrichCardDetail`; this file never decides whether to ask, only how.
  */
 
+import type { Brand } from '../../../Types/Brand.js';
 import { createHmac } from 'node:crypto';
 
 import { isOk } from '../../../Types/Procedure.js';
@@ -79,6 +80,9 @@ export function notAttempted(code: IDetailOutcome['outcomeCode']): IDetailOutcom
   };
 }
 
+/** A keyed digest over request parts, meaningless without the caller's secret. */
+export type DetailFingerprint = Brand<string, 'DetailFingerprint'>;
+
 /**
  * Stable fingerprint over the given parts.
  *
@@ -88,9 +92,9 @@ export function notAttempted(code: IDetailOutcome['outcomeCode']): IDetailOutcom
  * @param parts - Ordered inputs.
  * @returns Hex digest.
  */
-export function fingerprint(key: string, parts: readonly string[]): string {
+export function fingerprint(key: string, parts: readonly string[]): DetailFingerprint {
   const joined = parts.join(FIELD_SEPARATOR);
-  return createHmac('sha256', key).update(joined).digest('hex');
+  return createHmac('sha256', key).update(joined).digest('hex') as DetailFingerprint;
 }
 
 /**
