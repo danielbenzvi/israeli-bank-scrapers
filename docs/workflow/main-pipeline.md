@@ -1,3 +1,9 @@
+---
+source-files:
+  - .github/workflows/pr.yml
+  - .github/workflows/sonarcloud.yml
+---
+
 # Main pipeline (post-merge CI)
 
 BLUF: every merge to `main` starts **exactly one workflow run** — `Main Pipeline`
@@ -73,7 +79,7 @@ out which one happened rather than leaving `success` to be misread as
 | `main-pipeline.yml` | **yes** | `workflow_dispatch` (with `force_publish`) |
 | `release.yml` | no | `workflow_call` |
 | `codeql.yml` | no | `workflow_call`, `pull_request`, `schedule` |
-| `sonarcloud.yml` | no | `workflow_call`, `pull_request`, `workflow_dispatch` |
+| `sonarcloud.yml` | no | `workflow_call`, `workflow_dispatch` |
 | `workflow-security.yml` | no | `workflow_call`, `pull_request`, `workflow_dispatch` |
 | `docs.yml` | no | `workflow_call`, `workflow_dispatch` |
 | `pr.yml` | no | `pull_request`, `workflow_dispatch` |
@@ -146,6 +152,10 @@ not Scorecard, is the authority on GitHub Actions hardening here.
 **None.** The required status contexts are `Validate` and `SonarCloud Scan`.
 Both are produced by `pull_request` triggers, which this change does not
 touch. No check was renamed, so no protection rule needed editing.
+`SonarCloud Scan` has since moved from `sonarcloud.yml` into `pr.yml`, under
+the same name, so it can reuse the unit tests' coverage. `sonarcloud.yml` no
+longer runs on pull requests; it keeps the post-merge scan and manual
+`workflow_dispatch` runs.
 
 Removing `push: main` from `pr.yml` does not affect the `Validate` context: it
 is a PR context, and PR runs are unchanged.

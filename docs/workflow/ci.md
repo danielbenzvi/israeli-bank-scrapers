@@ -1,3 +1,13 @@
+---
+source-files:
+  - .github/workflows/pr.yml
+  - .github/workflows/pr-title.yml
+  - .github/workflows/pr-body-check.yml
+  - .github/workflows/codeql.yml
+  - .github/workflows/cache-cleanup.yml
+  - .github/scripts/ci/detect-changes.sh
+---
+
 # CI gates
 
 GitHub Actions runs these gates on every PR, except for the heavier jobs that
@@ -23,6 +33,7 @@ and release together — covered in
 | **Phase isolation lint** | `lint:phases:strict` | Phase H test code outside the allowed pattern | `src/Tests/Unit/Pipeline/CrossValidation/Phases/` |
 | **Unit tests** | `test:unit` | 4807 tests; all must pass | `--testPathIgnorePatterns=E2eReal --testPathIgnorePatterns=E2eMocked` |
 | **Pipeline + coverage** | `test:pipeline` | Coverage drops below 97/95/97/98 | `src/coverage/lcov-report/` |
+| **SonarCloud** | n/a (job `SonarCloud Scan`) | On a PR touching `src/**`: the quality gate fails, the PR adds any new issue, or `Detect changes` / `Unit tests` did not succeed | `sonar-project.properties`; [SonarCloud query protocol](code-review-tooling.md#sonarcloud--query-protocol) |
 | **Mock E2E** | `test:e2e:mock` | Fixture-driven E2E for 3 banks | `src/Tests/E2eMocked/` |
 | **Mock suite (orchestrated)** | `test:mock` | `scripts/run-mock-suite.ts` driving all configured banks | Same fixtures |
 | **Bank tests** | `test:e2e-factory-tests` | Phase H cross-bank factory drives every phase per bank | `src/Tests/Unit/Pipeline/CrossValidation/Phases/` |
@@ -62,6 +73,56 @@ Two notes on the mechanism:
 
 Contributors without write access should open an issue instead; the
 [Contributing overview](../contributing/index.md) says the same thing.
+
+## Superseded runs are cancelled
+
+A new push to a PR cancels the runs of the head it replaces. `pr.yml`,
+`pr-title.yml`, `pr-body-check.yml` and `codeql.yml` each declare a
+workflow-level `concurrency` group with `cancel-in-progress: true`, keyed
+`<workflow>-<event>-<PR number>`:
+
+- **PR number, not branch name.** A fork PR can reuse any branch name; keyed
+  on `head_ref`, opening one would cancel this repository's PR runs before
+  the fork policy above closes it.
+- **Event name included.** Runs with no PR — a manual dispatch, the weekly
+  CodeQL schedule, or `main-pipeline.yml` calling `codeql.yml` — key on their
+  own `run_id` instead, and the event name stops that id from matching a PR
+  number.
+
+`WorkflowConcurrencyGate.test.ts` pins these keys. It also checks that no
+workflow calls any of the four twice, because both calls would share the
+caller's `run_id` and the second would cancel the first.
+
+`Validate` and `SonarCloud Scan` run under a job-level `always()`, which a
+cancellation does not stop. Their steps still stop: GitHub re-checks each
+unfinished step's `if`, and a step that names no status function means
+`success()`. `SonarPrScanGate.test.ts` SPS-4 keeps the Sonar steps that way.
+
+## Closed PRs' caches are deleted
+
+A PR's Actions caches live on `refs/pull/<N>/merge`. Nothing reads them once
+the PR closes, but they still count against the repository's 10 GB cache
+quota and push `main`'s caches out. `.github/workflows/cache-cleanup.yml`
+deletes them in two ways:
+
+- **On `closed`** it deletes that PR's caches straight away.
+- **Daily**, and on manual dispatch, a sweep reads every page of the
+  repository's cache list and deletes the caches on `refs/pull/<N>/merge` of
+  PRs that are no longer open. It exists because some closes never start the
+  `closed` run: a PR closed or merged with `GITHUB_TOKEN` (the fork policy
+  above, Dependabot auto-merge), or one closed with a merge conflict. It
+  also covers a fork PR that someone closes first: GitHub gives that
+  `closed` run a read-only token, which cannot delete caches, so the job
+  skips it.
+
+Both read the PR's state right before deleting and skip an open PR, so a PR
+reopened before that read keeps its caches. The read and the delete are not
+atomic: a PR reopened between them loses all its caches, so its next run
+starts cold. Only `refs/pull/<N>/merge` with a
+numeric `N` is ever deleted, so `main`'s caches are out of reach. A failed
+delete is re-checked: if another run already removed the caches, the job
+still passes; if any are left, it fails. `CacheCleanupGate.test.ts` runs the
+committed script against a stubbed `gh` to pin all of this.
 
 ## Link checking
 
@@ -233,6 +294,13 @@ GITHUB_STEP_SUMMARY=/dev/stdout bash .github/scripts/ci/decoupling-compare.sh
 | Lines | ≥ 98% | same |
 
 A PR that drops any threshold fails `test:pipeline`. The post-Commit-1 numbers (v8.4.0) are **97.20% / 95.23% / 97.19% / 98.45%**.
+
+In CI, only the floor-version leg of `Unit tests (Node …)` collects coverage and
+enforces these thresholds. It is the leg matching `.nvmrc`, and it uploads
+`coverage-report`. The other legs run the same suite with `--coverage=false`.
+`SonarCloud Scan` downloads that artifact rather than running the suite again.
+Changing `.nvmrc` sets the `deps` flag, so even a PR that changes nothing else
+runs these legs and the check that ties `.nvmrc` to `engines.node`.
 
 ## Where to find logs
 
