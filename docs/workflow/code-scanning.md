@@ -9,7 +9,15 @@ source-files:
   - package.json
   - package-lock.json
   - .github/dependabot.yml
+  - renovate.json
+  - .nvmrc
+  - release-please-config.json
+  - .github/scripts/ci/is-bot-pr.cjs
+  - .github/scripts/ci/compute-gate-booleans.sh
+  - .github/scripts/ci/detect-changes.sh
+  - .github/workflows/pr-body-check.yml
   - src/Tests/Unit/Pipeline/CrossValidation/DependabotSecurityGrouping.test.ts
+  - src/Tests/Unit/Pipeline/CrossValidation/RenovateLockfileMaintenancePolicy.test.ts
 ---
 
 # Code scanning: two scanners, one authority
@@ -381,9 +389,83 @@ the alert → Reopen) so Dependabot can raise the pull request. Reopen only an
 alert that has a patched version; without one there is nothing to bump.
 
 **Limit:** Dependabot never targets a transitive that has no open alert. It
-moves only when a direct-dependency bump happens to re-resolve it. Keeping
-those current needs a lockfile refresh such as `npm update`, which this page
-does not cover.
+moves only when a direct-dependency bump happens to re-resolve it. A second
+lane covers the rest: [Renovate lockfile maintenance][renovate-lfm], configured
+in `renovate.json` with every other update type disabled, so it never
+competes with Dependabot. The first `packageRules` entry disables every
+package by name (`"*"`), so an update type Renovate adds later stays off too.
+Lockfile maintenance has no package name, so that rule never matches it.
+
+- Once a week (Friday, 00:00–05:59 Asia/Jerusalem) it regenerates the whole
+  `package-lock.json` within the ranges in `package.json`. It opens at most one
+  pull request, `chore(deps): lock file maintenance`, and only when the
+  lockfile changes.
+- `minimumReleaseAge: "3 days"` is not a guaranteed cooldown here. Renovate's
+  [minimum release age guide][renovate-mra] lists lockfile maintenance as
+  unsupported, because npm, not Renovate, picks the new versions. For npm,
+  Renovate passes a `--before` cutoff three days back. If npm fails with
+  `ETARGET`, for example because a locked package is newer than the cutoff,
+  Renovate retries without `--before` and logs a warning. A version published
+  in the last three days can therefore still land in the pull request.
+- Friday only keeps this run apart from Dependabot's Monday run. It does not
+  guarantee any package age. No automerge, code-owner review, the full unit
+  and mocked E2E run, and keeping bank secrets out limit what a fresh release
+  can reach before a human approves it. None of them enforces an age.
+- `constraints.npm` pins npm 10.9.2, the version bundled with the Node release
+  in `.nvmrc` that CI installs, so the lockfile format matches `npm ci`.
+- Dependabot security pull requests take precedence. When one merges first and
+  the lockfiles conflict, Renovate regenerates its branch on its next run
+  (`rebaseWhen` defaults to rebasing a conflicted branch).
+- The pull request is authored by `renovate[bot]`. `is-bot-pr.cjs` exempts it
+  from the PR-body gates, and `compute-gate-booleans.sh` keeps it off the
+  real-bank gates, so bank secrets never reach freshly installed package code.
+  The unit and mocked E2E suites still run (`deps` covers the lockfile).
+- It is never auto-merged: it needs code-owner approval like any other pull
+  request. `chore` is a hidden changelog type in `release-please-config.json`.
+- The [Renovate app][renovate-app] must run this repository in Interactive
+  mode; in Silent mode it opens no pull requests.
+
+To roll back: switch the app to Silent (or uninstall it), close the open pull
+request and delete its `renovate/lock-file-maintenance` branch, then revert the
+commit that added `renovate.json`. Confirm no onboarding pull request appears.
+
+`src/Tests/Unit/Pipeline/CrossValidation/RenovateLockfileMaintenancePolicy.test.ts`
+fails if `renovate.json` enables another update type, if `packageRules`
+drifts from the exact catch-all and update-type pair, if the cooldown or the
+schedule is dropped, if automerge is turned on, or if either bot exemption
+drifts. It also pins the wiring in `pr.yml`. The workflow must run on every
+pull request to `main`, with no path filter. The detector must flag
+`package-lock.json` as `deps`, and the `changes` job must export that flag.
+The `changes` job and its detector and gate steps must carry no `if:` or
+`continue-on-error:`. The gate step must receive the PR author.
+`real_gates_enabled` must reach `validate`. The unit, factory E2E and mocked
+E2E jobs must need only `changes` and run whenever `deps` is set. Conditions
+are compared after unwrapping `${{ }}` and every layer of outer parentheses.
+In `pr-body-check.yml`, each gate is found by its step id (`section-check`,
+`stage-body`). It must require `is-bot-pr.cjs` once, at the top level, and
+return on `isBotPr(pr)` before it fails the check or stages the body. Before
+the guard, each gate declares exactly its own `const` bindings, none missing,
+repeated or extra, each with its exact initializer: `fs` from
+`require('node:fs')` (`stage-body` only), `isBotPr` from the workspace
+`is-bot-pr.cjs` require, and `pr` from `context.payload.pull_request`. For a
+bot pull request, the guard only calls `core.info` (in `stage-body`, then
+exactly `core.setOutput('skip', 'true')`), then a bare `return`. The
+`core.setOutput` calls are pinned too: `section-check` sets none, and
+`stage-body` sets `skip` to `true` only inside the guard and to `false` once,
+at the top level, after staging the body. The statements after the
+`stage-body` guard are pinned verbatim (stage `pr.body || ''`, then set
+`skip` to `false`), so the staged body cannot be blanked or the skip flipped
+back. Neither gate step, nor the `body-check` job, may set `if:` or
+`continue-on-error:`. The cited-path check is found by its exact `run`
+command. It must appear once, run only when `skip` is not `true`, and set no
+`continue-on-error:`. This is an exact syntactic check of the inline script,
+not a semantic proof. It does not defend against deliberate obfuscation,
+which code-owner review covers. The test also checks that there
+is exactly one `chore` changelog section and that it stays hidden, so
+lockfile commits stay out of release notes. `pr.yml`
+changes too often to bind to this page, so the test guards it instead. The
+pre-commit docs-staleness hook flags this page when a bound file changes. CI
+runs that check only when `src/` changes.
 
 Verify after a change:
 
@@ -456,3 +538,6 @@ a few minutes more — and expect `fixed`.
 [braces-advisory]: https://github.com/advisories/GHSA-vfj7-8cjw-p6xm
 [fast-copy-advisory]: https://github.com/advisories/GHSA-jggr-w7fw-pc2j
 [grouped-security-errors]: https://docs.github.com/en/code-security/reference/supply-chain-security/troubleshoot-dependabot/dependabot-errors#failed-to-update-dependency-in-grouped-pull-request
+[renovate-lfm]: https://docs.renovatebot.com/configuration-options/#lockfilemaintenance
+[renovate-mra]: https://docs.renovatebot.com/key-concepts/minimum-release-age/
+[renovate-app]: https://github.com/apps/renovate

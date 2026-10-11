@@ -23,12 +23,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Assert mandatory PR-body sections
+        id: section-check
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
-            // Bot-authored PRs (Dependabot, release-please) cannot generate the §10
-            // guideline-compliance table by design. Exempt them so dependency bumps and
-            // release PRs are not blocked from auto-merge. Human PRs remain enforced.
+            // Bot-authored PRs (Dependabot, Renovate, release-please) cannot generate the §10
+            // guideline-compliance table by design. Exempt them from this body gate so
+            // Dependabot auto-merge and release PRs are not blocked. The exemption does not
+            // enable auto-merge: Renovate PRs set automerge false and still need code-owner
+            // review. Human PRs remain enforced.
             // Shared with the cited-path check below so both gates exempt the same set.
             const isBotPr = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/ci/is-bot-pr.cjs`);
             const pr = context.payload.pull_request;
