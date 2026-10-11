@@ -211,17 +211,27 @@ jobs:
         run: bash .github/scripts/ci/compute-gate-booleans.sh
 
   # ──────────────────────────────────────────────────────────────
-  # Lint + types + docs canaries — independent of test jobs.
-  # Runs whenever ANY of the conditionally-gated child steps could
-  # fire, so the umbrella job's status reflects reality.
+  # Static checks — lint, types and docs canaries, plus four short
+  # gates: bank coverage, decoupling, Scorecard npm pins and docs
+  # staleness. They used to be five jobs; one runner now
+  # serves them, so a push stays inside the Free plan's 20
+  # concurrent jobs.
+  #
+  # The four gates are background steps started right after setup,
+  # so each one finishes and reports even when a lint step fails.
+  # The closing `wait-all` always runs and fails the job if any of
+  # them failed. No step writes a file another step reads — see
+  # docs/workflow/ci.md "Static checks".
+  #
+  # No job `if:`: Scorecard pins always run, so the OR of the
+  # members' conditions is true. Each step keeps its old job's
+  # condition AND-ed with its own. Scorecard pins and docs
+  # staleness now also wait for `Detect changes`; if it fails they
+  # are skipped, and `Validate` fails on `changes` itself.
   # ──────────────────────────────────────────────────────────────
-  lint-and-types:
-    name: Lint & Types
+  static-checks:
+    name: Static checks
     needs: changes
-    # `full_suite` already subsumes `src` (it is `src OR critical_deps`), so it
-    # stands in for it here — see CriticalDepsFullSuiteGate.test.ts, which pins
-    # that invariant so this umbrella cannot silently stop covering src PRs.
-    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.md == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.syntax_guardrails == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
@@ -233,6 +243,30 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      # Docs staleness gate — fails when a file bound to a docs page by
+      # its `source-files:` front-matter changes and no page bound to it
+      # changes in the same PR.
+      #
+      # Always on (no `changes` filter): bindings are not limited to
+      # `src/` — workflows, CI scripts and package manifests are bound
+      # too, and a path filter would let those drift silently. The scan
+      # itself takes seconds.
+      #
+      # Bot PRs are exempt (same predicate as the PR-body gates): a bot
+      # cannot update the bound page, and Dependabot action-SHA bumps and
+      # release-please version bumps routinely touch bound files. See
+      # docs/workflow/code-scanning.md for the compensating controls and
+      # .github/scripts/ci/docs-staleness.sh for the algorithm.
+      #
+      # The bot check is a plain `node` step, not `actions/github-script`:
+      # it loads code checked out from the PR, and github-script would
+      # hand that code the job's GITHUB_TOKEN. A `run:` step receives no
+      # token, and `persist-credentials: false` leaves none in .git/config.
+      - name: Skip bot PRs
+        if: github.event_name == 'pull_request'
+        timeout-minutes: 10
+        id: bot
+        run: node .github/scripts/ci/docs-staleness-bot-skip.cjs
       # `ci_scripts` is here because the CI scripts smoke test below exercises
       # `scripts/decoupling-metrics`, and a workflow-only PR would otherwise run
       # it against an empty `node_modules`. That is belt-and-braces, not the
@@ -246,8 +280,56 @@ jobs:
       # `syntax_guardrails=true` without setting `full_suite`/`deps`, so without
       # this the gate would run against an empty `node_modules` and fail on a
       # clean runner. That is the exact PR shape most able to disarm the guard.
+      # `metrics` is here for the decoupling gate below: `full_suite` and
+      # `ci_scripts` already cover its other two triggers.
       - uses: $/.github/actions/setup-node-deps
-        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.syntax_guardrails == 'true'
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.syntax_guardrails == 'true' || needs.changes.outputs.metrics == 'true'
+      # Scorecard npm-pin gate — the scheduled OpenSSF Scorecard scan
+      # (scorecard.yml) raises PinnedDependenciesID for any npm command
+      # that downloads without a lockfile pin, but only after the change
+      # has merged. This runs the same engine, pinned by version and
+      # checksum and coupled to the scan's own scorecard-action pin, over
+      # the merge commit, and fails before the merge instead.
+      #
+      # Always on (no `changes` filter): a pin can be broken from any
+      # file Scorecard reads, and the scan itself takes seconds. No token
+      # reaches the downloaded binary — `--local` mode only reads files —
+      # and checkout keeps no credential behind. See
+      # .github/scripts/ci/scorecard-npm-pins.sh.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        timeout-minutes: 10
+        with:
+          node-version-file: .nvmrc
+      - name: npm commands are pinned as Scorecard reads them
+        background: true
+        timeout-minutes: 10
+        run: /bin/bash .github/scripts/ci/scorecard-npm-pins.sh
+      # Bank integration coverage gate — fast structural lint.
+      - name: Bank integration coverage gate
+        if: needs.changes.outputs.full_suite == 'true'
+        background: true
+        timeout-minutes: 5
+        run: npm run lint:bank-coverage
+      # Decoupling regression — see .github/actions/decoupling-gate.
+      # `metrics` and `ci_scripts` are included so a change to the measuring
+      # tool or to this gate always exercises it. Without them the thing that
+      # detects architectural regressions could be weakened and merged without
+      # ever having run.
+      - name: Decoupling
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.metrics == 'true' || needs.changes.outputs.ci_scripts == 'true'
+        background: true
+        timeout-minutes: 15
+        uses: $/.github/actions/decoupling-gate
+        env:
+          THRESHOLD_PCT: '10'
+      - name: Docs staleness canary
+        if: github.event_name == 'pull_request' && steps.bot.outputs.skip != 'true'
+        background: true
+        timeout-minutes: 10
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: bash .github/scripts/ci/docs-staleness.sh
       - if: needs.changes.outputs.full_suite == 'true'
         run: npx ncp src/Tests/.tests-config.tpl.cjs src/Tests/.tests-config.cjs
 
@@ -424,7 +506,7 @@ jobs:
         run: npm run type-check
 
       # The published .d.ts is emitted by TS 6 (tsup DTS), and ts-jest and
-      # typescript-eslint also read the tree through TS 6. The Build job
+      # typescript-eslint also read the tree through TS 6. The build step
       # already gates the emission itself, but it does so through
       # tsconfig.build.json, which excludes src/Tests and *.test.ts — so
       # most of the repo was only ever seen by TS 7. This gate closes that:
@@ -475,10 +557,13 @@ jobs:
         run: npm audit --audit-level=high
         continue-on-error: true
 
+      - name: Wait for the background gates
+        wait-all:
+
   # ──────────────────────────────────────────────────────────────
   # The gate scripts' bash-3.2 claim, actually exercised.
   #
-  # `lint-and-types` already runs these two test scripts, but on
+  # `static-checks` already runs these two test scripts, but on
   # ubuntu-latest — bash 5.x, where every construct the portable
   # helpers exist to avoid works fine. So the step named "gate
   # scripts must run on bash 3.2" could not fail for the reason it
@@ -612,28 +697,35 @@ jobs:
           retention-days: 7
 
   # ──────────────────────────────────────────────────────────────
-  # Memory regression — measures peak RSS of the memory-sensitive suites
-  # for this PR AND for its merge base, on the SAME runner inside the SAME
-  # job. Peak memory varies with the runner's CPU count and kernel, so an
-  # absolute MB ceiling drifts and eventually fails for reasons unrelated
-  # to the change; measuring both sides together cancels the machine out
-  # and leaves only what the PR did. See memory-compare.sh for the verdict.
+  # Package & E2E factory — the build and dry-run publish, the consumer
+  # install, the E2E factory tests and the memory regression gate.
+  # They used to be four jobs; one runner now serves them, so a push
+  # stays inside the Free plan's 20 concurrent jobs.
+  #
+  # E2E factory is the only background step. It imports `src/`, not
+  # `lib/`, so the build beside it cannot change what it tests. The
+  # package chain stays in the foreground and in order — build, dry-run
+  # pack, upload, consumer install — because `npm pack` runs `prepare`,
+  # which rebuilds `lib/`: beside the upload it would rewrite `lib/`
+  # while it is uploaded.
+  #
+  # Memory runs after `wait-all`, alone, so its PR-vs-merge-base
+  # comparison sees no sibling load. A failed earlier step skips it on
+  # that run; the job is red and `Validate` fails either way.
+  #
+  # The job `if:` is the OR of the four old jobs' conditions. Each step
+  # keeps its old job's condition AND-ed with its own, and its old job's
+  # time limit. The job limit is the longest chain: 10 + 20 + 30
+  # minutes. See docs/workflow/ci.md "Package & E2E factory".
   # ──────────────────────────────────────────────────────────────
-  memory:
-    name: Memory
+  package-factory:
+    name: Package & E2E factory
     needs: changes
-    # `ci_scripts` is included so that a change to this gate always exercises
-    # it. Without that, the job that measures memory could be modified and
-    # merged without ever having run.
-    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.test_config == 'true' || needs.changes.outputs.ci_scripts == 'true'
+    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.public_surface == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.ci_scripts == 'true' || needs.changes.outputs.test_config == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     permissions:
       contents: read
-    env:
-      MEMORY_WORKLOAD: test:memory
-      MEMORY_SAMPLES: '3'
-      THRESHOLD_PCT: '10'
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -641,10 +733,80 @@ jobs:
           # commit has to be present locally rather than just the tip.
           fetch-depth: 0
           persist-credentials: false
+      # Camoufox only when the E2E factory tests run. Consumer install then
+      # runs with it on disk; its scrape still fails at the unbuilt
+      # better-sqlite3 binding, so its verdict is unchanged.
       - uses: $/.github/actions/setup-test-runner
         with:
-          camoufox: 'false'
+          camoufox: ${{ (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true') && 'true' || 'false' }}
+          gh-token: ${{ (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true') && secrets.GITHUB_TOKEN || '' }}
+      # E2E factory tests — independent of Mode A / Mode B / e2e-mocked.
+      # Also runs on dependency-only PRs (`deps`) so runtime-dep bumps that
+      # touch no `src/` file are still validated against the real Camoufox
+      # browser launch. See detect-changes.sh `deps` output.
+      - name: E2E factory tests
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true'
+        background: true
+        timeout-minutes: 15
+        run: npm run test:e2e-factory-tests -- --ci --verbose
+      # Build + dry-run publish — independent of test jobs (build can
+      # succeed even if tests fail; the `validate` aggregator below
+      # blocks merge when tests are red).
+      # `public_surface` is here so a snapshot-only, checker-only or
+      # build-config-only change still runs `Check public API surface`. Gating
+      # this job on `full_suite` alone let exactly those edits skip the gate.
+      - uses: $/.github/actions/build-package
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.public_surface == 'true'
+        timeout-minutes: 10
+      - name: Dry-run publish (catch packaging errors early)
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.public_surface == 'true'
+        timeout-minutes: 10
+        run: npm pack --dry-run
+      - name: Upload build artifact
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.public_surface == 'true'
+        timeout-minutes: 10
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-output
+          path: lib/
+          retention-days: 7
+      # Consumer install — the only gate that leaves the working tree.
+      #
+      # Every other job runs from the repo, where devDependencies are on
+      # disk and the runner sets `CI=true`. A defect that needs a
+      # production install and an unset `CI` is unreachable from all of
+      # them by construction. This step packs the real tarball, installs
+      # it with `--omit=dev` into a scratch project — the production graph
+      # comes from our lockfile via `npm ci`, which Scorecard counts as
+      # pinned (alert #131) — and runs a scrape with `CI` and `NODE_ENV`
+      # unset, the ordinary state of a consumer's app. See
+      # .github/scripts/ci/consumer-install.sh.
+      #
+      # Hermetic: no bank is contacted (see the script's header).
+      # The script packs (and therefore builds, via `prepare`) itself, so
+      # there is no separate build step to keep in sync with it.
+      - name: Package works for consumers
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.ci_scripts == 'true'
+        timeout-minutes: 20
+        run: /bin/bash .github/scripts/ci/consumer-install.sh
+      - name: Wait for the E2E factory tests
+        wait-all:
+      # Memory regression — measures peak RSS of the memory-sensitive suites
+      # for this PR AND for its merge base, on the SAME runner inside the SAME
+      # job. Peak memory varies with the runner's CPU count and kernel, so an
+      # absolute MB ceiling drifts and eventually fails for reasons unrelated
+      # to the change; measuring both sides together cancels the machine out
+      # and leaves only what the PR did. See memory-compare.sh for the verdict.
+      # `ci_scripts` is included so that a change to this gate always exercises
+      # it. Without that, the job that measures memory could be modified and
+      # merged without ever having run.
       - name: Ensure GNU time is available
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.test_config == 'true' || needs.changes.outputs.ci_scripts == 'true'
+        timeout-minutes: 30
+        env:
+          MEMORY_WORKLOAD: test:memory
+          MEMORY_SAMPLES: '3'
+          THRESHOLD_PCT: '10'
         run: |
           set -euo pipefail
           # Measured explicitly rather than relying on the runner image: if
@@ -657,10 +819,21 @@ jobs:
           /usr/bin/time --version
       - name: Measure this PR
         id: head
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.test_config == 'true' || needs.changes.outputs.ci_scripts == 'true'
+        timeout-minutes: 30
+        env:
+          MEMORY_WORKLOAD: test:memory
+          MEMORY_SAMPLES: '3'
+          THRESHOLD_PCT: '10'
         run: echo "mb=$(bash .github/scripts/ci/memory-measure.sh .)" >> "$GITHUB_OUTPUT"
       - name: Check out the merge base
         id: base_tree
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.test_config == 'true' || needs.changes.outputs.ci_scripts == 'true'
+        timeout-minutes: 30
         env:
+          MEMORY_WORKLOAD: test:memory
+          MEMORY_SAMPLES: '3'
+          THRESHOLD_PCT: '10'
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
@@ -703,129 +876,23 @@ jobs:
           echo "ready=true" >> "$GITHUB_OUTPUT"
       - name: Measure the merge base
         id: base
-        if: steps.base_tree.outputs.ready == 'true'
+        if: (needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.test_config == 'true' || needs.changes.outputs.ci_scripts == 'true') && steps.base_tree.outputs.ready == 'true'
+        timeout-minutes: 30
+        env:
+          MEMORY_WORKLOAD: test:memory
+          MEMORY_SAMPLES: '3'
+          THRESHOLD_PCT: '10'
         run: echo "mb=$(bash .github/scripts/ci/memory-measure.sh ../base)" >> "$GITHUB_OUTPUT"
       - name: Compare against the merge base
+        if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.test_config == 'true' || needs.changes.outputs.ci_scripts == 'true'
+        timeout-minutes: 30
         env:
+          MEMORY_WORKLOAD: test:memory
+          MEMORY_SAMPLES: '3'
+          THRESHOLD_PCT: '10'
           BASE_MB: ${{ steps.base.outputs.mb }}
           HEAD_MB: ${{ steps.head.outputs.mb }}
         run: bash .github/scripts/ci/memory-compare.sh
-
-  # ──────────────────────────────────────────────────────────────
-  # Decoupling regression — measures the architecture of this PR AND of its
-  # merge base, then refuses changes that loosen it.
-  #
-  # Against the merge base rather than the committed baseline snapshot: that
-  # baseline is refreshed by hand, so it drifts behind main and a diff against
-  # it measures everything merged since it was taken. The merge base is exact
-  # and needs no maintenance.
-  #
-  # Guardrail metrics are ratchets, not budgets — a new import cycle, a new
-  # `any`, or a deleted canary / ESLint rule fails outright. See
-  # decoupling-compare.sh for the policy.
-  # ──────────────────────────────────────────────────────────────
-  decoupling:
-    name: Decoupling
-    needs: changes
-    # `metrics` and `ci_scripts` are included so a change to the measuring
-    # tool or to this gate always exercises it. Without them the thing that
-    # detects architectural regressions could be weakened and merged without
-    # ever having run.
-    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.metrics == 'true' || needs.changes.outputs.ci_scripts == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      THRESHOLD_PCT: '10'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # The base tree is checked out as a second worktree, so the base
-          # commit has to be present locally rather than just the tip.
-          fetch-depth: 0
-          persist-credentials: false
-      - uses: $/.github/actions/setup-node-deps
-      # HEAD's `node_modules` serves both measurements: the tool is always
-      # HEAD's copy, so `typescript` resolves from HEAD's tree even when the
-      # target is the base worktree. The base tree needs no install of its own.
-      - name: Measure this PR
-        run: node scripts/decoupling-metrics/measure.mjs . head head.json
-      - name: Check out the merge base
-        id: base_tree
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          set -euo pipefail
-          # The base SHA comes from the event rather than `HEAD^1`: if the PR
-          # is not cleanly mergeable there is no merge commit to take a first
-          # parent from, and that would silently compare against the wrong
-          # tree instead of failing loudly.
-          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
-            echo "::notice::Base commit ${BASE_SHA} is not available - skipping the comparison."
-            exit 0
-          fi
-          git worktree add ../base "$BASE_SHA" \
-            || echo "::notice::Could not materialise the base tree - skipping the comparison."
-      # HEAD's copy of the tool measures BOTH trees, so a change to the tool
-      # itself cannot masquerade as a change in the architecture.
-      - name: Measure the merge base
-        run: |
-          set -euo pipefail
-          if [ ! -d ../base ]; then
-            exit 0
-          fi
-          # A base tree that cannot be measured must not block the PR. Drop any
-          # half-written snapshot so the comparison reports "not measured"
-          # rather than failing on invalid JSON, which is reserved for a tool
-          # that is genuinely broken.
-          if ! node scripts/decoupling-metrics/measure.mjs ../base base base.json; then
-            rm -f scripts/decoupling-metrics/snapshots/base.json
-            echo "::notice::Could not measure the merge base - skipping the comparison."
-          fi
-      - name: Compare against the merge base
-        env:
-          BASE_SNAPSHOT: scripts/decoupling-metrics/snapshots/base.json
-          HEAD_SNAPSHOT: scripts/decoupling-metrics/snapshots/head.json
-        run: bash .github/scripts/ci/decoupling-compare.sh
-      - name: Append the full decoupling matrix
-        if: hashFiles('scripts/decoupling-metrics/snapshots/base.json') != ''
-        run: |
-          set -euo pipefail
-          {
-            echo ""
-            echo "<details><summary>Full decoupling matrix</summary>"
-            echo ""
-            node scripts/decoupling-metrics/diff.mjs \
-              scripts/decoupling-metrics/snapshots/base.json \
-              scripts/decoupling-metrics/snapshots/head.json
-            echo ""
-            echo "</details>"
-          } >> "$GITHUB_STEP_SUMMARY"
-
-  # ──────────────────────────────────────────────────────────────
-  # E2E factory tests — independent of Mode A / Mode B / e2e-mocked.
-  # Also runs on dependency-only PRs (`deps`) so runtime-dep bumps that
-  # touch no `src/` file are still validated against the real Camoufox
-  # browser launch. See detect-changes.sh `deps` output.
-  # ──────────────────────────────────────────────────────────────
-  e2e-factory:
-    name: E2E factory
-    needs: changes
-    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-test-runner
-        with:
-          gh-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: E2E factory tests
-        run: npm run test:e2e-factory-tests -- --ci --verbose
 
   # ──────────────────────────────────────────────────────────────
   # E2E mocked tests — flake-prone under high worker counts; the
@@ -855,28 +922,6 @@ jobs:
           gh-token: ${{ secrets.GITHUB_TOKEN }}
       - name: E2E mocked tests
         run: npm run test:e2e:mock -- --ci --verbose
-
-  # ──────────────────────────────────────────────────────────────
-  # Bank integration coverage gate — fast structural lint.
-  # ──────────────────────────────────────────────────────────────
-  bank-coverage:
-    name: Bank coverage gate
-    needs: changes
-    if: needs.changes.outputs.full_suite == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-test-runner
-        with:
-          camoufox: 'false'
-          tests-config: 'false'
-      - name: Bank integration coverage gate
-        run: npm run lint:bank-coverage
 
   # ──────────────────────────────────────────────────────────────
   # Integration Mode A + Mode B — Static HTML drive + Mirror Origin
@@ -938,151 +983,6 @@ jobs:
       - name: Integration Mode B — shard ${{ matrix.shard }}/3
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: npm run test:integration:mode-b:bank -- --shard=${{ matrix.shard }}/3
-
-  # ──────────────────────────────────────────────────────────────
-  # Build + dry-run publish — independent of test jobs (build can
-  # succeed even if tests fail; the `validate` aggregator below
-  # blocks merge when tests are red).
-  # ──────────────────────────────────────────────────────────────
-  build:
-    name: Build
-    needs: changes
-    # `public_surface` is here so a snapshot-only, checker-only or
-    # build-config-only change still runs `Check public API surface`. Gating
-    # this job on `full_suite` alone let exactly those edits skip the gate.
-    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.public_surface == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-test-runner
-        with:
-          camoufox: 'false'
-          tests-config: 'false'
-      - uses: $/.github/actions/build-package
-      - name: Dry-run publish (catch packaging errors early)
-        run: npm pack --dry-run
-      - name: Upload build artifact
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: build-output
-          path: lib/
-          retention-days: 7
-
-  # ──────────────────────────────────────────────────────────────
-  # Consumer install — the only job that leaves the working tree.
-  #
-  # Every other job runs from the repo, where devDependencies are on
-  # disk and the runner sets `CI=true`. A defect that needs a
-  # production install and an unset `CI` is unreachable from all of
-  # them by construction. This job packs the real tarball, installs
-  # it with `--omit=dev` into a scratch project — the production graph
-  # comes from our lockfile via `npm ci`, which Scorecard counts as
-  # pinned (alert #131) — and runs a scrape with `CI` and `NODE_ENV`
-  # unset, the ordinary state of a consumer's app. See
-  # .github/scripts/ci/consumer-install.sh.
-  #
-  # Hermetic: no bank is contacted (see the script's header).
-  # ──────────────────────────────────────────────────────────────
-  consumer-install:
-    name: Consumer install
-    needs: changes
-    if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true' || needs.changes.outputs.ci_scripts == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: $/.github/actions/setup-test-runner
-        with:
-          camoufox: 'false'
-          tests-config: 'false'
-      # The script packs (and therefore builds, via `prepare`) itself, so
-      # there is no separate build step to keep in sync with it.
-      - name: Package works for consumers
-        run: /bin/bash .github/scripts/ci/consumer-install.sh
-
-  # ──────────────────────────────────────────────────────────────
-  # Scorecard npm-pin gate — the scheduled OpenSSF Scorecard scan
-  # (scorecard.yml) raises PinnedDependenciesID for any npm command
-  # that downloads without a lockfile pin, but only after the change
-  # has merged. This runs the same engine, pinned by version and
-  # checksum and coupled to the scan's own scorecard-action pin, over
-  # the merge commit, and fails before the merge instead.
-  #
-  # Always on (no `changes` filter): a pin can be broken from any
-  # file Scorecard reads, and the scan itself takes seconds. No token
-  # reaches the downloaded binary — `--local` mode only reads files —
-  # and checkout keeps no credential behind. See
-  # .github/scripts/ci/scorecard-npm-pins.sh.
-  # ──────────────────────────────────────────────────────────────
-  scorecard-npm-pins:
-    name: Scorecard npm pins
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
-        with:
-          node-version-file: .nvmrc
-      - name: npm commands are pinned as Scorecard reads them
-        run: /bin/bash .github/scripts/ci/scorecard-npm-pins.sh
-
-  # ──────────────────────────────────────────────────────────────
-  # Docs staleness gate — fails when a file bound to a docs page by
-  # its `source-files:` front-matter changes and no page bound to it
-  # changes in the same PR.
-  #
-  # Always on (no `changes` filter): bindings are not limited to
-  # `src/` — workflows, CI scripts and package manifests are bound
-  # too, and a path filter would let those drift silently. The scan
-  # itself takes seconds.
-  #
-  # Bot PRs are exempt (same predicate as the PR-body gates): a bot
-  # cannot update the bound page, and Dependabot action-SHA bumps and
-  # release-please version bumps routinely touch bound files. See
-  # docs/workflow/code-scanning.md for the compensating controls and
-  # .github/scripts/ci/docs-staleness.sh for the algorithm.
-  #
-  # The bot check is a plain `node` step, not `actions/github-script`:
-  # it loads code checked out from the PR, and github-script would
-  # hand that code the job's GITHUB_TOKEN. A `run:` step receives no
-  # token, and `persist-credentials: false` leaves none in .git/config.
-  # ──────────────────────────────────────────────────────────────
-  docs-staleness:
-    name: Docs staleness
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    env:
-      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Skip bot PRs
-        id: bot
-        run: node .github/scripts/ci/docs-staleness-bot-skip.cjs
-      - name: Docs staleness canary
-        if: steps.bot.outputs.skip != 'true'
-        env:
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: bash .github/scripts/ci/docs-staleness.sh
 
   # ──────────────────────────────────────────────────────────────
   # SonarCloud Scan — the required `SonarCloud Scan` context for PRs.
@@ -1173,9 +1073,11 @@ jobs:
           # retried: under `-e` a failure would end the step unretried. The
           # total is then compared as text, not with `-gt`: a number too big
           # for a shell integer makes `-gt` error inside its `if`, and an
-          # erroring `if` lets the step pass.
+          # erroring `if` lets the step pass. `--max-time` bounds each call, so
+          # a stalled API cannot use up the job's timeout before the retries;
+          # `--fail` sends an HTTP error down the same retry path.
           while [ "${attempt}" -le 5 ]; do
-            total=$(curl -sS "${api}?${query}" | jq -r '.total // empty') || total=""
+            total=$(curl -sS --fail --max-time 30 "${api}?${query}" | jq -r '.total // empty') || total=""
             if [[ "${total}" =~ ^[0-9]+$ ]]; then break; fi
             total=""
             echo "::warning::SonarCloud API gave no issue count, retrying (${attempt}/5)"
@@ -1210,19 +1112,12 @@ jobs:
     name: Validate
     needs:
       - changes
-      - lint-and-types
+      - static-checks
       - portability-macos
       - unit-tests
-      - memory
-      - decoupling
-      - e2e-factory
+      - package-factory
       - e2e-mocked
-      - bank-coverage
       - integration
-      - build
-      - consumer-install
-      - scorecard-npm-pins
-      - docs-staleness
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

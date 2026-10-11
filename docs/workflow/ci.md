@@ -33,7 +33,7 @@ and release together — covered in
 | **Phase isolation lint** | `lint:phases:strict` | Phase H test code outside the allowed pattern | `src/Tests/Unit/Pipeline/CrossValidation/Phases/` |
 | **Unit tests** | `test:unit` | 4807 tests; all must pass | `--testPathIgnorePatterns=E2eReal --testPathIgnorePatterns=E2eMocked` |
 | **Pipeline + coverage** | `test:pipeline` | Coverage drops below 97/95/97/98 | `src/coverage/lcov-report/` |
-| **SonarCloud** | n/a (job `SonarCloud Scan`) | On a PR touching `src/**`: the quality gate fails, the PR adds any new issue, or `Detect changes` / `Unit tests` did not succeed | `sonar-project.properties`; [SonarCloud query protocol](code-review-tooling.md#sonarcloud--query-protocol) |
+| **SonarCloud** | n/a (job `SonarCloud Scan`) | On a PR touching `src/**`: the quality gate fails, the PR adds any new issue, SonarCloud's new-issue count cannot be read in 5 tries of at most 30 s each, or `Detect changes` / `Unit tests` did not succeed | `sonar-project.properties`; [SonarCloud query protocol](code-review-tooling.md#sonarcloud--query-protocol) |
 | **Mock E2E** | `test:e2e:mock` | Fixture-driven E2E for 3 banks | `src/Tests/E2eMocked/` |
 | **Mock suite (orchestrated)** | `test:mock` | `scripts/run-mock-suite.ts` driving all configured banks | Same fixtures |
 | **Bank tests** | `test:e2e-factory-tests` | Phase H cross-bank factory drives every phase per bank | `src/Tests/Unit/Pipeline/CrossValidation/Phases/` |
@@ -43,7 +43,7 @@ and release together — covered in
 | **Decoupling** | n/a (`scripts/decoupling-metrics/measure.mjs`) | A new import cycle, a new `any`, a deleted canary or ESLint rule, or fan-out growing more than 10% | [`decoupling-compare.sh`](#decoupling-regression-gate) |
 | **PR body compliance** | n/a (server-side `actions/github-script`) | PR body missing one of the 3 mandatory sections (`## Why`, `## What`, `## Guideline compliance`) | `.github/workflows/pr-body-check.yml` — mirrored locally by [`npm run lint:pr-body`](pre-push.md) |
 | **Cited paths** | `lint:doc-paths` | An agent doc or PR body cites a repo path that does not exist | `scripts/check-doc-paths.mjs` — see [Doc path gate](doc-paths.md) |
-| **Docs staleness** | n/a (`docs-staleness` job in `pr.yml`; also the pre-commit hook) | A file listed in a docs page's `source-files:` front matter changed, but no page that lists it changed. Runs on every PR that `is-bot-pr.cjs` does not exempt: bot PRs and same-repository `dependabot/…` or `release-please--…` branches skip it — see [Code scanning](code-scanning.md) | `.github/scripts/ci/docs-staleness.sh` |
+| **Docs staleness** | n/a (`Docs staleness canary` step of the [`Static checks`](#static-checks) job in `pr.yml`; also the pre-commit hook) | A file listed in a docs page's `source-files:` front matter changed, but no page that lists it changed. Runs on every PR that `is-bot-pr.cjs` does not exempt: bot PRs and same-repository `dependabot/…` or `release-please--…` branches skip it — see [Code scanning](code-scanning.md) | `.github/scripts/ci/docs-staleness.sh` |
 | **Links** | n/a (Lychee step in `pr.yml`) | A link in `README.md` or `docs/**/*.md` is broken; runs when a PR touches Markdown, and on every manual run | [Link checking](#link-checking) |
 | **Fork PRs** | n/a (server-side `gh`) | A pull request opened from a fork is commented on and closed automatically — see [Pull requests come from this repository only](#pull-requests-come-from-this-repository-only) | `.github/workflows/no-fork-prs.yml` |
 
@@ -98,6 +98,43 @@ cancellation does not stop. Their steps still stop: GitHub re-checks each
 unfinished step's `if`, and a step that names no status function means
 `success()`. `SonarPrScanGate.test.ts` SPS-4 keeps the Sonar steps that way.
 
+## A push stays under the job limit
+
+BLUF: one push to a PR needs at most 18 runners at once, and an open event
+at most 19. The account runs at most 20 jobs at once. After `Validate`, the
+count also rests on measured timing (below).
+`PushConcurrencyBound.test.ts` pins the count, so a PR that adds a job, a
+matrix leg or a PR-triggered workflow has to update it.
+
+- **`pr.yml`.** Once `Detect changes` ends, it starts 12 runners: Static
+  checks, the bash 3.2 (macOS) check, 4 Unit tests legs, Package & E2E
+  factory, E2E mocked, 3 Integration shards and Dependency Review.
+  `SonarCloud Scan` waits for all 4 Unit tests legs, so it never adds to the
+  peak.
+- **Other workflows.** A push also starts CodeQL, Validate PR Title, PR Body
+  Compliance and the Workflow Security Scan, one job each. GitHub adds 2
+  runs of its own: Copilot Code Review and GitHub Advanced Security's Code
+  scanning AI findings. 12 + 4 + 2 = 18.
+- **Open events.** Dependabot Auto-Merge (`opened`) or Block Fork PRs
+  (`opened`, `reopened`) adds 1 job; Dependabot's PRs never come from a
+  fork, so both never run on one PR. `cache-cleanup.yml` runs only on
+  `closed`.
+- **After Validate.** Once `Validate` passes and a reviewer approves a group,
+  its E2E-real legs start: 13 across the 5 groups (4, 2, 3, 1 and 3). A
+  group holds its approval gate's runner or its legs', never both. Only
+  `SonarCloud Scan` and CodeQL may still be running beside them, plus
+  GitHub's 2 runs: 13 + 2 + 2 = 17. Dependency Review, Validate PR Title, PR
+  Body Compliance and the Workflow Security Scan are not counted: on 31
+  full-suite runs (12 with the scan), each ended at least 180 s before
+  `Validate` did. Timing, not `needs:`, keeps them apart, so any other run is
+  counted. If they did overlap the legs, the peak would be 21 (20 without
+  the scan), and GitHub would queue the jobs over 20.
+- **One run per PR.** Every workflow a push or an edit starts cancels the
+  run it supersedes (above), except the Workflow Security Scan, which runs
+  for about a minute and only when workflow or action files change. Overlap
+  between two pushes or two PRs is left to GitHub, which queues jobs over the
+  limit.
+
 ## Closed PRs' caches are deleted
 
 A PR's Actions caches live on `refs/pull/<N>/merge`. Nothing reads them once
@@ -124,14 +161,83 @@ delete is re-checked: if another run already removed the caches, the job
 still passes; if any are left, it fails. `CacheCleanupGate.test.ts` runs the
 committed script against a stubbed `gh` to pin all of this.
 
+## Static checks
+
+BLUF: one job, `Static checks`, runs the lint and type steps plus four short
+repository gates — Scorecard npm pins, bank integration coverage, decoupling
+and docs staleness — that used to be jobs of their own. Fewer jobs keep a
+push inside the account's concurrent-job limit.
+
+- **Background steps.** The four gates are `background` steps that run beside
+  the lint steps. The job's last step, `wait-all`, fails the job when any of
+  them failed. It always runs, even after a lint step fails, so no gate's
+  failure is lost.
+- **Conditions.** Each step keeps the `if:` its old job had, joined with its
+  own. The job has no `if:` of its own, because Scorecard npm pins runs on
+  every run. The job waits for `Detect changes`, so Scorecard npm pins and
+  docs staleness start a few seconds later than they did as separate jobs.
+  `Validate` needs `Detect changes` too, so a failed change detection fails
+  the merge rather than silently skipping them.
+- **No shared writes.** Background steps share the working tree with the
+  foreground ones, so none may write a file another step reads. Scorecard
+  scans a `git archive` copy in a temporary directory. Decoupling writes its
+  git-ignored snapshots and a sibling `../base` worktree. Bank coverage and
+  docs staleness only read. `StaticChecksJob.test.ts` pins the background
+  set, so adding a step there means repeating this check. Decoupling never
+  shares a job with the build, whose guardrails hash `lib/`, or with the
+  memory gate, which adds the same `../base` worktree.
+
+## Package & E2E factory
+
+BLUF: one job, `Package & E2E factory`, runs four gates that used to be jobs
+of their own — the build and dry-run publish, the consumer install, the E2E
+factory tests and the memory regression gate. Fewer jobs keep a push inside
+the account's concurrent-job limit.
+
+- **Order.** The E2E factory tests are the only `background` step. They
+  import `src/`, not `lib/`, so the build beside them cannot change what they
+  test. The package chain runs in the foreground, in order: build,
+  `npm pack --dry-run`, the `build-output` upload, then the consumer install.
+  The consumer install packs the package, and `npm pack` runs `prepare`,
+  which rebuilds `lib/`; beside the upload it would rewrite `lib/` while it
+  is uploaded.
+- **Memory runs alone.** A `wait-all` step follows the consumer install and
+  fails the job if the E2E factory tests failed. The memory steps run after
+  it, with nothing beside them, so the PR and its merge base are measured
+  under the same load.
+- **Conditions.** Each step keeps the `if:` its old job had, joined with its
+  own. The job's `if:` is the OR of the four. Setup installs Camoufox, and
+  passes it a token, only when the E2E factory tests run.
+- **Full history.** Checkout keeps `fetch-depth: 0`. With a shallow clone
+  the memory gate cannot check out the merge base, reports "not measured"
+  and passes.
+- **Camoufox and the consumer install.** When the E2E factory tests run,
+  Camoufox is on disk during the consumer install. Its scrape still ends in
+  the expected `camoufox launch failed`, at the unbuilt `better-sqlite3`
+  binding. Without Camoufox, `camoufox-js` first downloads it and then fails
+  to start, so the verdict is the same either way.
+- **Time limits.** Each step keeps its old job's limit: 10 minutes for each
+  build step, 15 for the E2E factory tests, 20 for the consumer install and
+  30 for each memory step. The job limit is the longest chain,
+  10 + 20 + 30 = 60 minutes. A timed-out job is cancelled, and `Validate`
+  fails on `cancelled`.
+- **First failure ends the job.** A failed build step skips the consumer
+  install and memory; failed E2E factory tests skip memory. The job is red
+  and `Validate` fails either way, and the skipped gates report on the re-run
+  after the fix.
+
+`PackageFactoryJob.test.ts` pins each step whole, the order, the job's
+condition and limit, and that `Validate` needs the job.
+
 ## Link checking
 
 BLUF: Lychee checks every link in `README.md` and `docs/**/*.md`, but it
 checks links into this repository on `main` or the branch placeholder
 against the files tracked in the checked-out commit, not against github.com.
 
-The step runs in the `Lint & Types` job. On a pull request it runs when the
-PR touches a Markdown file and checks the PR's merge commit. On a manual
+The step runs in the [`Static checks`](#static-checks) job. On a pull
+request it runs when the PR touches a Markdown file and checks the PR's
+merge commit. On a manual
 `workflow_dispatch` run, change detection has no base to compare with, so it
 always runs and checks the selected branch. Files under `tasks/` are not
 checked. Links are handled in four ways:
@@ -186,12 +292,13 @@ fixed ceiling.
 
 Peak memory depends on the runner's CPU count, kernel and Node build, so an
 absolute megabyte limit drifts and eventually fails for reasons that have
-nothing to do with the change under review. The `Memory` job instead measures
+nothing to do with the change under review. The gate instead measures
 **both** sides in the same job on the same runner, which cancels the machine
 out, and fails only when the PR's peak grows by more than `THRESHOLD_PCT`
-(default 10%).
+(default 10%). Its steps run last in the
+`Package & E2E factory` job, after every other step there has finished.
 
-The job runs when a PR touches source, dependencies, the test configuration or
+The gate runs when a PR touches source, dependencies, the test configuration or
 the CI scripts themselves (`full_suite`, `deps`, `test_config`, `ci_scripts`).
 A docs-only PR cannot move memory, so it is skipped rather than measured twice
 to prove nothing.
@@ -232,7 +339,8 @@ GITHUB_STEP_SUMMARY=/dev/stdout bash .github/scripts/ci/memory-compare.sh
 BLUF: guardrails are ratchets. They may get stronger on any PR; they may
 never get weaker.
 
-The `Decoupling` job measures the architecture of the PR **and** of its merge
+The decoupling gate, a background step of the [`Static checks`](#static-checks)
+job, measures the architecture of the PR **and** of its merge
 base, using HEAD's copy of the measuring tool for both sides so a change to
 the tool cannot masquerade as a change in the code. `measure.mjs` parses
 TypeScript, so HEAD's dependencies are installed before it runs. The base
@@ -269,7 +377,7 @@ Exit codes distinguish two situations that must not be collapsed:
   produced garbage; failing loudly is what stops a broken tool from silently
   disabling the gate.
 
-The job also appends the full cluster-level matrix from `diff.mjs` to the run
+The gate also appends the full cluster-level matrix from `diff.mjs` to the run
 summary, so per-cluster LoC, cohesion and fan-out shifts are visible without
 running anything locally.
 

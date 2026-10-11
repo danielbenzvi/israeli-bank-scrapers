@@ -10,8 +10,9 @@
  *
  * <p>`detect-changes.sh` therefore emits `critical_deps` (the browser
  * stack moved) and `full_suite` (`src OR critical_deps`). This test pins
- * the wiring: every heavy job must gate on `full_suite`, so re-adding a
- * `src`-only gate fails here instead of silently shrinking coverage.
+ * the wiring: every heavy job, and every heavy step of a job that holds
+ * several gates, must gate on `full_suite`, so re-adding a `src`-only gate
+ * fails here instead of silently shrinking coverage.
  */
 
 import { readFileSync } from 'node:fs';
@@ -29,14 +30,25 @@ const GATE_SCRIPT = join(REPO_ROOT, '.github/scripts/ci/compute-gate-booleans.sh
 const PACKAGE_JSON = join(REPO_ROOT, 'package.json');
 
 /** Jobs that must run whenever the browser stack moves, not just on `src`. */
-const HEAVY_JOB_KEYS = [
-  'unit-tests',
-  'e2e-factory',
-  'e2e-mocked',
-  'bank-coverage',
-  'integration',
-  'build',
+const HEAVY_JOB_KEYS = ['unit-tests', 'e2e-mocked', 'integration', 'package-factory'] as const;
+
+/** The job that runs the lint, type and short repository gates as its steps. */
+const STATIC_CHECKS_JOB_KEY = 'static-checks';
+
+/** The job that runs the build, consumer install, E2E factory and memory gates as its steps. */
+const PACKAGE_JOB_KEY = 'package-factory';
+
+/** Steps of a merged job, as `[job, step name]`, that must run on `full_suite`, not just on `src`. */
+const HEAVY_STEPS = [
+  [STATIC_CHECKS_JOB_KEY, 'Bank integration coverage gate'],
+  [PACKAGE_JOB_KEY, 'E2E factory tests'],
 ] as const;
+
+/** The build step's action; it also runs the public-surface check. */
+const BUILD_PACKAGE = '$/.github/actions/build-package';
+
+/** The install step's action; every Node step of the job needs what it installs. */
+const SETUP_NODE_DEPS = '$/.github/actions/setup-node-deps';
 
 /** Runtime packages whose version defines the browser stack. */
 const CRITICAL_PACKAGES = ['playwright-core', '@hieutran094/camoufox-js'] as const;
@@ -45,7 +57,7 @@ const CRITICAL_PACKAGES = ['playwright-core', '@hieutran094/camoufox-js'] as con
  * Paths that define the published API surface or the gate guarding it.
  *
  * <p>`full_suite` is `src OR critical_deps`, so a snapshot-only or
- * checker-only edit left the Build job — and with it the public-surface
+ * checker-only edit left the build — and with it the public-surface
  * gate — skipped. These must keep feeding the separate `public_surface`
  * flag.
  */
@@ -174,6 +186,7 @@ function syntaxGuardrailInputs(script: string): readonly string[] {
 
 interface IPrYamlStep {
   readonly name?: string;
+  readonly uses?: string;
   readonly if?: unknown;
 }
 
@@ -259,6 +272,20 @@ function stepConditions(jobKey: string, stepName: string): readonly string[] {
 }
 
 /**
+ * Resolve the `if:` conditions of every step in a job that runs an action.
+ *
+ * @param jobKey - YAML job key under `jobs:`.
+ * @param uses - Exact `uses:` of the step to match.
+ * @returns One condition string per matching step.
+ */
+function usesConditions(jobKey: string, uses: string): readonly string[] {
+  const matched = findJob(jobKey);
+  const steps = matched.flatMap((job): IPrYamlStep[] => [...(job.steps ?? [])]);
+  const using = steps.filter((step): boolean => step.uses === uses);
+  return using.map((step): string => (typeof step.if === 'string' ? step.if : ''));
+}
+
+/**
  * Count non-overlapping occurrences of a literal needle.
  *
  * @param haystack - Text to scan.
@@ -276,6 +303,17 @@ describe('CriticalDepsFullSuiteGate', () => {
     expect(condition).not.toBe('');
     expect(condition).toContain("full_suite == 'true'");
   });
+
+  it.each(HEAVY_STEPS)(
+    '[CI-CRIT-GATE] PrYaml_HeavyStep_%s_%s_ShouldGateOnFullSuite',
+    (jobKey, name) => {
+      const conditions = stepConditions(jobKey, name);
+      expect(conditions).toHaveLength(1);
+      const condition = conditions.join('');
+      expect(condition).toContain("full_suite == 'true'");
+      expect(condition).not.toContain("outputs.src == 'true'");
+    },
+  );
 
   it.each(CRITICAL_PACKAGES)('[CI-CRIT-GATE] Detector_Package_%s_ShouldStayDeclared', pkg => {
     const rawManifest = read(PACKAGE_JSON);
@@ -305,8 +343,19 @@ describe('CriticalDepsFullSuiteGate', () => {
     );
   });
 
-  it('[CI-CRIT-GATE] PrYaml_LintAndTypes_ShouldGateOnFullSuiteNotSrc', () => {
-    const condition = jobCondition('lint-and-types');
+  /**
+   * The job holds gates that run on every pull request, so it has no job-level
+   * `if:` that a `src`-only edit could narrow; its steps gate themselves, and
+   * the install they need runs on `full_suite`.
+   */
+  it('[CI-CRIT-GATE] PrYaml_StaticChecks_ShouldInstallOnFullSuiteNotSrc', () => {
+    const matched = findJob(STATIC_CHECKS_JOB_KEY);
+    const jobGate = jobCondition(STATIC_CHECKS_JOB_KEY);
+    expect(matched).toHaveLength(1);
+    expect(jobGate).toBe('');
+    const conditions = usesConditions(STATIC_CHECKS_JOB_KEY, SETUP_NODE_DEPS);
+    expect(conditions).toHaveLength(1);
+    const condition = conditions.join('');
     expect(condition).toContain("full_suite == 'true'");
     expect(condition).not.toContain("outputs.src == 'true'");
   });
@@ -314,7 +363,7 @@ describe('CriticalDepsFullSuiteGate', () => {
   it.each(DEPS_GATED_STEP_NAMES)(
     '[CI-CRIT-GATE] PrYaml_Step_%s_ShouldCoverDepsOnlyBumps',
     stepName => {
-      const conditions = stepConditions('lint-and-types', stepName);
+      const conditions = stepConditions(STATIC_CHECKS_JOB_KEY, stepName);
       expect(conditions).toHaveLength(1);
       const condition = conditions.join('');
       expect(condition).toContain("needs.changes.outputs.full_suite == 'true'");
@@ -325,7 +374,7 @@ describe('CriticalDepsFullSuiteGate', () => {
   it.each(CONFIG_GATED_STEP_NAMES)(
     '[CI-CRIT-GATE] PrYaml_Step_%s_ShouldCoverConfigOnlyEdits',
     stepName => {
-      const conditions = stepConditions('lint-and-types', stepName);
+      const conditions = stepConditions(STATIC_CHECKS_JOB_KEY, stepName);
       expect(conditions).toHaveLength(1);
       const condition = conditions.join('');
       expect(condition).toContain("needs.changes.outputs.syntax_guardrails == 'true'");
@@ -335,7 +384,7 @@ describe('CriticalDepsFullSuiteGate', () => {
   it.each(OR_ONLY_STEP_NAMES)(
     '[CI-CRIT-GATE] PrYaml_Step_%s_ShouldCombineFlagsWithOr',
     stepName => {
-      const conditions = stepConditions('lint-and-types', stepName);
+      const conditions = stepConditions(STATIC_CHECKS_JOB_KEY, stepName);
       const condition = conditions.join('');
       expect(condition).toContain('||');
       expect(condition).not.toContain('&&');
@@ -364,11 +413,16 @@ describe('CriticalDepsFullSuiteGate', () => {
     expect(validateOutputs).toContain('full_suite');
   });
 
-  it('[CI-CRIT-GATE] PrYaml_Build_ShouldAlsoGateOnPublicSurface', () => {
+  it('[CI-CRIT-GATE] PrYaml_Build_ShouldGateOnFullSuiteAndPublicSurface', () => {
     const changesOutputs = jobOutputKeys('changes');
-    const condition = jobCondition('build');
+    const conditions = usesConditions(PACKAGE_JOB_KEY, BUILD_PACKAGE);
+    const jobGate = jobCondition(PACKAGE_JOB_KEY);
+    const condition = conditions.join('');
     expect(changesOutputs).toContain('public_surface');
+    expect(conditions).toHaveLength(1);
+    expect(condition).toContain("full_suite == 'true'");
     expect(condition).toContain("public_surface == 'true'");
+    expect(jobGate).toContain("public_surface == 'true'");
   });
 
   it.each(PUBLIC_SURFACE_PATHS)(
@@ -380,7 +434,8 @@ describe('CriticalDepsFullSuiteGate', () => {
   );
 
   it('[CI-CRIT-GATE] PrYaml_Build_ShouldUnionNotIntersectTheFlags', () => {
-    const condition = jobCondition('build');
+    const conditions = usesConditions(PACKAGE_JOB_KEY, BUILD_PACKAGE);
+    const condition = conditions.join('');
     const isConjunction = condition.includes('&&');
     expect(condition).toContain('||');
     expect(isConjunction).toBe(false);
