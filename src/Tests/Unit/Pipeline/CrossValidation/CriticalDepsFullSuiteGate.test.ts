@@ -15,7 +15,9 @@
  * fails here instead of silently shrinking coverage.
  */
 
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -297,6 +299,128 @@ function countOf(haystack: string, needle: string): number {
   return segments.length - 1;
 }
 
+/**
+ * Paths whose change ALONE must arm `critical_deps` and `full_suite`: the
+ * browser-stack manifest and the tooling that validates it, plus the two
+ * original pinning files.
+ */
+const BROWSER_STACK_PATHS = [
+  'browser-stack.json',
+  'scripts/browser-stack/x.mjs',
+  'scripts/patch-playwright-core.mjs',
+  '.github/actions/install-camoufox/install.sh',
+] as const;
+
+/** Look-alikes the anchored patterns must NOT match. */
+const NOT_BROWSER_STACK_PATHS = [
+  'docs/browser-stack.json',
+  'scripts/browser-stack.json.bak',
+] as const;
+
+/**
+ * The environment minus every inherited `GIT_*` variable. Husky runs this
+ * suite from a git hook, which exports `GIT_INDEX_FILE` and friends; left in
+ * place they would point the throwaway repo's git at THIS repo's index.
+ */
+const INHERITED_ENV = Object.entries(process.env);
+const NON_GIT_ENV = INHERITED_ENV.filter(([key]): boolean => !key.startsWith('GIT_'));
+const CLEAN_ENV: NodeJS.ProcessEnv = Object.fromEntries(NON_GIT_ENV);
+
+/**
+ * Run git in a throwaway repo, isolated from the user's hooks and signing.
+ *
+ * @param dir - Repository root.
+ * @param args - Git arguments.
+ * @returns Trimmed stdout.
+ */
+function git(dir: string, ...args: string[]): string {
+  const isolation = ['-c', 'core.hooksPath=/dev/null', '-c', 'commit.gpgsign=false'];
+  const identity = ['-c', 'user.name=t', '-c', 'user.email=t@example.invalid'];
+  const options = { cwd: dir, encoding: 'utf8' as const, env: CLEAN_ENV };
+  const result = spawnSync('git', [...isolation, ...identity, ...args], options);
+  return result.stdout.trim();
+}
+
+/**
+ * Turn a throwaway directory into a two-commit repo whose head adds one file.
+ *
+ * @param dir - Empty directory to initialise.
+ * @param path - Repo-relative path the head commit adds.
+ * @returns The base commit SHA.
+ */
+function seedRepo(dir: string, path: string): string {
+  git(dir, 'init', '-q');
+  git(dir, 'commit', '-q', '--allow-empty', '-m', 'base');
+  const base = git(dir, 'rev-parse', 'HEAD');
+  const file = join(dir, path);
+  const parent = dirname(file);
+  mkdirSync(parent, { recursive: true });
+  writeFileSync(file, 'x\n');
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'head');
+  return base;
+}
+
+/**
+ * Split one `$GITHUB_OUTPUT` line at its first `=`.
+ *
+ * @param line - A `key=value` line.
+ * @returns The key and the value.
+ */
+function parseOutputLine(line: string): readonly [string, string] {
+  const at = line.indexOf('=');
+  return [line.slice(0, at), line.slice(at + 1)];
+}
+
+/**
+ * Run the real detector against a seeded repo.
+ *
+ * @param dir - Repository root.
+ * @param base - Commit the detector diffs against.
+ * @returns Every `key=value` the detector wrote to `$GITHUB_OUTPUT`.
+ */
+function runDetector(dir: string, base: string): Readonly<Record<string, string>> {
+  const output = join(dir, 'github-output');
+  const env = { ...CLEAN_ENV, BASE_SHA: base, GITHUB_OUTPUT: output };
+  spawnSync('bash', [DETECTOR], { cwd: dir, env, encoding: 'utf8' });
+  const text = readFileSync(output, 'utf8');
+  const lines = text.trim().split('\n');
+  const pairs = lines.map(parseOutputLine);
+  return Object.fromEntries(pairs);
+}
+
+/**
+ * Run the real detector on a two-commit repo whose head adds exactly one file.
+ *
+ * @param path - Repo-relative path the head commit adds.
+ * @returns Every `key=value` the detector wrote to `$GITHUB_OUTPUT`.
+ */
+function detectFor(path: string): Readonly<Record<string, string>> {
+  const tempRoot = tmpdir();
+  const prefix = join(tempRoot, 'critical-deps-');
+  const dir = mkdtempSync(prefix);
+  try {
+    const base = seedRepo(dir, path);
+    return runDetector(dir, base);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Ask the REAL repo's ignore rules about one path, as a new untracked file.
+ *
+ * @param path - Repo-relative path.
+ * @returns The deciding pattern (`''` when none matches; a `!` prefix means
+ *   re-included) and the path git reported, which proves git actually ran.
+ */
+function ignoreVerdict(path: string): readonly [string, string] {
+  const line = git(REPO_ROOT, 'check-ignore', '-v', '-n', '--no-index', path);
+  const [source = '', reported = ''] = line.split('\t');
+  const pattern = source.split(':').slice(2).join(':');
+  return [pattern, reported];
+}
+
 describe('CriticalDepsFullSuiteGate', () => {
   it.each(HEAVY_JOB_KEYS)('[CI-CRIT-GATE] PrYaml_HeavyJob_%s_ShouldGateOnFullSuite', jobKey => {
     const condition = jobCondition(jobKey);
@@ -334,6 +458,32 @@ describe('CriticalDepsFullSuiteGate', () => {
     const script = read(DETECTOR);
     expect(script).toContain('^scripts/patch-playwright-core\\.mjs');
     expect(script).toContain('.github/actions/install-camoufox/');
+  });
+
+  // `src=false` proves the run took the real diff branch, not the fail-open
+  // branch that sets every flag true when git or BASE_SHA is unusable.
+  it.each(BROWSER_STACK_PATHS)(
+    '[CI-CRIT-GATE] Detector_OnlyChanged_%s_ShouldArmCriticalDepsAndFullSuite',
+    path => {
+      const flags = detectFor(path);
+      expect(flags).toMatchObject({ src: 'false', critical_deps: 'true', full_suite: 'true' });
+    },
+  );
+
+  it.each(NOT_BROWSER_STACK_PATHS)(
+    '[CI-CRIT-GATE] Detector_OnlyChanged_%s_ShouldNotArmCriticalDeps',
+    path => {
+      const flags = detectFor(path);
+      expect(flags).toMatchObject({ src: 'false', critical_deps: 'false', full_suite: 'false' });
+    },
+  );
+
+  // An ignored critical path needs `git add -f` to land, so the detector
+  // entry above would guard a file the tree can silently drop.
+  it.each(BROWSER_STACK_PATHS)('[CI-CRIT-GATE] GitIgnore_%s_ShouldStayTrackable', path => {
+    const [pattern, reported] = ignoreVerdict(path);
+    expect(reported).toBe(path);
+    expect(pattern).toMatch(/^(!.*)?$/u);
   });
 
   it('[CI-CRIT-GATE] Detector_FullSuite_ShouldBeSrcOrCriticalDeps', () => {

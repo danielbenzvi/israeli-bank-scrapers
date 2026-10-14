@@ -15,6 +15,9 @@ source-files:
   - .github/scripts/ci/is-bot-pr.cjs
   - .github/scripts/ci/compute-gate-booleans.sh
   - .github/scripts/ci/detect-changes.sh
+  - .github/actions/install-camoufox/action.yml
+  - .github/actions/install-camoufox/install.sh
+  - docker/Dockerfile.ci-mirror
   - .github/workflows/pr-body-check.yml
   - src/Tests/Unit/Pipeline/CrossValidation/DependabotSecurityGrouping.test.ts
   - src/Tests/Unit/Pipeline/CrossValidation/RenovateLockfileMaintenancePolicy.test.ts
@@ -295,12 +298,38 @@ Residual risk for consumers is low for two independent reasons:
 2. The archive is a `daijro/camoufox` GitHub release fetched over HTTPS, not
    attacker-supplied input.
 
-Our own CI relies on the override, not on avoiding the path. Every
-`install-camoufox` call follows `setup-node-deps` (`npm ci`). A cache hit skips
-extraction. A cache miss runs `camoufox-js fetch` first, which extracts with the
-locked adm-zip 0.6.1. Only when that fails or yields the wrong version does the
-action clear the cache and fall back to `gh release download` plus system
-`unzip`.
+Our own CI relies on the override at launch, not at install. Every
+`install-camoufox` call follows `setup-node-deps` (`npm ci`) and runs
+`.github/actions/install-camoufox/install.sh`, which also builds the Docker CI
+mirror. The script installs into the directory camoufox-js launches from:
+`CAMOUFOX_INSTALL_DIR` when set, else `~/.cache/camoufox`. That directory must
+not exist yet: before any download, the script refuses a relative path or any
+existing entry there (an older install, an empty directory, a file or a symlink)
+and leaves it as it is, so a mistyped override cannot touch unrelated files. CI
+jobs and the Docker build always start without one. Every run installs from the
+release asset of the tag pinned in `browser-stack.json`, checked against
+`camoufox.linuxX64Sha256`, the SHA-256 pinned beside the tag; it trusts no
+install already on disk. In CI the asset comes from the action's cache, which
+holds the asset and never the install, and is hashed again after every restore.
+A mismatch or no cached asset means a download, and a download that misses the
+pin fails before anything is extracted. A verified download replaces a kept file
+that failed the hash with one rename; a directory or symlink at the asset's name
+is left as it is, and the download is used without being kept or saved. The
+action saves a fresh download under a key unique to the run and restores the
+newest entry for the tag and digest, so the next download supersedes a corrupt
+entry instead of every later job paying for one. The script extracts with system
+`unzip` into a staging directory beside the install directory, checks the
+binary, writes `version.json` last, and only then renames the staging directory
+into place with rename(2). That rename fails, leaving the path as it is, if
+anything but an empty directory appeared there during the download, so a failed
+run installs nothing. It never runs `camoufox-js fetch`, which would resolve
+camoufox-js's own newest release instead of the pin. CI downloads the exact
+asset with `gh release download`; the Docker build has no token and uses `curl`
+on the public release URL, so the image carries no GitHub CLI and no copy of the
+asset. At launch, camoufox-js downloads its default uBlock Origin addon into
+that directory when it is missing and extracts it with `extractEntryTo`, which
+runs on the locked adm-zip 0.6.1. A manifest edit is a browser-stack change: the
+detector arms `critical_deps`, so the pull request runs the full suite.
 
 **Action:** keep the override until camoufox-js declares `>=0.6.1` itself, then
 drop it. Watch the advisory: it bounds the range by `last_affected`, so a
