@@ -23,6 +23,8 @@ source-files:
   - src/Tests/Unit/Pipeline/CrossValidation/RenovateLockfileMaintenancePolicy.test.ts
   - .github/scripts/ci/docs-staleness-bot-skip.cjs
   - src/Tests/Unit/Pipeline/CrossValidation/DocsStalenessGate.test.ts
+  - .github/workflows/pr.yml
+  - src/Tests/Unit/Pipeline/CrossValidation/BrowserStackGateWiring.test.ts
 ---
 
 # Code scanning: two scanners, one authority
@@ -326,7 +328,8 @@ run installs nothing. It never runs `camoufox-js fetch`, which would resolve
 camoufox-js's own newest release instead of the pin. CI downloads the exact
 asset with `gh release download`; the Docker build has no token and uses `curl`
 on the public release URL, so the image carries no GitHub CLI and no copy of the
-asset. At launch, camoufox-js downloads its default uBlock Origin addon into
+asset. That `curl`, like the image's Node download, limits its connect and total
+time, so a stalled download fails the build instead of hanging it. At launch, camoufox-js downloads its default uBlock Origin addon into
 that directory when it is missing and extracts it with `extractEntryTo`, which
 runs on the locked adm-zip 0.6.1. A manifest edit is a browser-stack change: the
 detector arms `critical_deps`, so the pull request runs the full suite.
@@ -474,8 +477,11 @@ pull request to `main`, with no path filter. The detector must flag
 The `changes` job and its detector and gate steps must carry no `if:` or
 `continue-on-error:`. The gate step must receive the PR author.
 `real_gates_enabled` must reach `validate`. The unit, mocked E2E and
-`package-factory` jobs must need only `changes` and run whenever `deps` is
-set. Inside `package-factory`, the factory E2E step keeps its own `deps` term
+`package-factory` jobs must run whenever `deps` is set. The unit and
+`package-factory` jobs must need only `changes`. Mocked E2E also needs the
+`browser-stack` job, which has no `if:` and passes when its steps are
+skipped, so a dependency-only pull request outside the browser stack still
+runs it. Inside `package-factory`, the factory E2E step keeps its own `deps` term
 (PackageFactoryJob PFJ-4). Conditions
 are compared after unwrapping `${{ }}` and every layer of outer parentheses.
 In `pr-body-check.yml`, a newer push or body edit of the same pull request

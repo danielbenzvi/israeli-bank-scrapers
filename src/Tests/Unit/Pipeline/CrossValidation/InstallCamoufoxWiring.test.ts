@@ -13,7 +13,12 @@
  * Camoufox install, tokenless, so it needs no GitHub CLI and must not ship
  * one. No consumer may spell the pinned tag or digest: a literal there
  * would survive a manifest bump, so a static cache key would keep restoring
- * the old asset, or Docker would install a different one from CI.
+ * the old asset, or Docker would install a different one from CI. Every curl
+ * in `install.sh` and the Docker mirror bounds its connect and total time to
+ * a positive number of seconds, so a stalled download fails rather than hangs
+ * the job or the build. Lines are joined at continuations and every word
+ * `curl` outside a package install counts as a call, so a continued, bare or
+ * substituted call cannot slip past.
  */
 
 import { readFileSync } from 'node:fs';
@@ -21,6 +26,14 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { parse } from 'yaml';
+
+import {
+  CONNECT_BOUND,
+  curlCallsIn,
+  logicalLines,
+  TOTAL_BOUND,
+  unboundedCalls,
+} from '../../../Helpers/CurlCalls.js';
 
 const THIS_FILE_PATH = fileURLToPath(import.meta.url);
 const THIS_DIR = dirname(THIS_FILE_PATH);
@@ -63,8 +76,6 @@ const RESOLVE_RUN = [
 
 /** `install.sh`'s default install directory, below `$HOME`. */
 const DEFAULT_DIR_RE = /INSTALL_DIR="\$\{CAMOUFOX_INSTALL_DIR:-\$HOME\/(?<dir>[^}"]+)\}"/u;
-/** A Dockerfile line continuation plus the next line's indent. */
-const CONTINUATION_RE = /\\\n\s*/gu;
 /** A Dockerfile instruction that starts a build stage. */
 const FROM_RE = /^FROM\s/iu;
 /**
@@ -86,6 +97,9 @@ const DOCKER_INSTALL: readonly string[] = [
 
 /** Every file that consumes the pinned tag without owning it. */
 const CONSUMERS: readonly string[] = [ACTION_REL, SCRIPT_REL, DOCKERFILE_REL];
+
+/** A download bounds both how long it may wait to connect and how long it may take. */
+const CURL_TIME_BOUNDS: readonly RegExp[] = [CONNECT_BOUND, TOTAL_BOUND];
 
 /** One step of the composite. */
 interface IStep {
@@ -170,11 +184,8 @@ function scriptDefaultDir(): string {
  * @returns One trimmed instruction per entry.
  */
 function dockerInstructions(): readonly string[] {
-  const lines = readRepoFile(DOCKERFILE_REL).split('\n');
-  const code = lines.filter(line => !line.trimStart().startsWith('#'));
-  const joined = code.join('\n').replaceAll(CONTINUATION_RE, ' ');
-  const instructions = joined.split('\n').map(line => line.trim());
-  return instructions.filter(line => line !== '');
+  const text = readRepoFile(DOCKERFILE_REL);
+  return logicalLines(text);
 }
 
 /**
@@ -192,6 +203,44 @@ function finalDockerStage(): readonly string[] {
   const first = Math.max(last, 0);
   return instructions.slice(first);
 }
+
+/**
+ * The logical code lines of `install.sh`.
+ *
+ * @returns One trimmed line per command.
+ */
+function scriptCode(): readonly string[] {
+  const text = readRepoFile(SCRIPT_REL);
+  return logicalLines(text);
+}
+
+/** How to read the code of each file that downloads with curl. */
+const DOWNLOADER_CODE: Readonly<Record<string, () => readonly string[]>> = {
+  [SCRIPT_REL]: scriptCode,
+  [DOCKERFILE_REL]: dockerInstructions,
+};
+const DOWNLOADERS = Object.keys(DOWNLOADER_CODE);
+
+/** A curl that bounds both its connect and its total time. */
+const BOUNDED_CURL = 'curl -fsSL --connect-timeout 30 --max-time 60 -o "$1/a" "$url"';
+
+/** Curl uses ICW-9 must flag, each next to a bounded call. */
+const UNBOUNDED_CURLS: readonly (readonly [string, string])[] = [
+  ['zero bounds', 'curl -fsSL --connect-timeout 0 --max-time 0 -o a "$url"'],
+  ['a missing total bound', 'curl -fsSL --connect-timeout 30 -o a "$url"'],
+  ['a continued call in a function', 'fallback() {\n  curl \\\n    -fsSL "$url"\n}'],
+  ['a bare URL', 'curl "$url"'],
+  ['a call in a command substitution', 'body="$(curl "$url")"'],
+];
+
+/** Code with bounded curls only, and curl named as a package to install. */
+const BOUNDED_CODE = [
+  BOUNDED_CURL,
+  'RUN curl -fsSL --connect-timeout=30 --max-time 600 "$url" \\',
+  '        | tar -xJ -C /opt',
+  'RUN apt-get update && apt-get install -y --no-install-recommends \\',
+  '        ca-certificates curl git',
+].join('\n');
 
 /** The `camoufox` block `browser-stack.json` pins. */
 interface IPinnedCamoufox {
@@ -257,6 +306,28 @@ describe('install-camoufox wiring', () => {
   it('[ICW-7] the Docker image installs tokenless and carries no GitHub CLI', () => {
     const ghLines = finalDockerStage().filter(line => GH_PATH_RE.test(line));
     expect(ghLines).toEqual([]);
+  });
+
+  it.each(DOWNLOADERS)('[ICW-9] every curl in %s bounds its time', rel => {
+    const code = DOWNLOADER_CODE[rel]();
+    const calls = curlCallsIn(code);
+    const unbounded = unboundedCalls(code, CURL_TIME_BOUNDS);
+    expect(calls.length).toBeGreaterThan(0);
+    expect(unbounded).toEqual([]);
+  });
+
+  it.each(UNBOUNDED_CURLS)('[ICW-9] flags %s next to a bounded curl', (_name, snippet) => {
+    const code = logicalLines(`${BOUNDED_CURL}\n${snippet}`);
+    const unbounded = unboundedCalls(code, CURL_TIME_BOUNDS);
+    expect(unbounded).toHaveLength(1);
+  });
+
+  it('[ICW-9] passes bounded curls and curl named as a package', () => {
+    const code = logicalLines(BOUNDED_CODE);
+    const calls = curlCallsIn(code);
+    const unbounded = unboundedCalls(code, CURL_TIME_BOUNDS);
+    expect(calls).toHaveLength(2);
+    expect(unbounded).toEqual([]);
   });
 
   it.each(CONSUMERS)('[ICW-6] %s never spells the pinned tag or digest', rel => {
