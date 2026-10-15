@@ -11,8 +11,8 @@
 # Every run installs from release-asset bytes that hash to the pinned
 # digest, and trusts nothing already on disk: an install left by an earlier
 # run, or restored from a cache, could hold any binary. Checking it would
-# need a second pin per release for the ~1.3 GB extracted tree, so the
-# script checks the ~663 MB asset instead and extracts it on every run.
+# need a second pin per release for the whole extracted tree, so the
+# script checks the one asset file instead and extracts it on every run.
 #
 # The asset is the copy kept in CAMOUFOX_ASSET_DIR when that is set and the
 # copy still hashes to the pin; the action restores that directory from its
@@ -30,11 +30,11 @@
 # never replaces one. CI jobs and the Docker build always start without one;
 # to reinstall, remove the old install first.
 #
-# It never runs `camoufox-js fetch`: that resolves the newest release inside
-# camoufox-js's own range (`>=alpha.1, <1`), not an exact tag, so it matches
-# the pin only when the pin is the newest release. Do NOT track LATEST:
-# v150.0.2-beta.25's locale regression (navigator.language he-IL to en-US)
-# broke AntiDetection.e2e-mocked.test.ts.
+# It never runs `camoufox-js fetch`: that resolves the newest non-prerelease
+# release inside camoufox-js's own range (`>=alpha.1, <1`), not an exact tag,
+# so it matches the pin only when the pin is that release. Do NOT track
+# LATEST: a past release's locale regression (navigator.language he-IL to
+# en-US) broke AntiDetection.e2e-mocked.test.ts.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -94,7 +94,8 @@ download_asset() {
 }
 
 # Streamed through node, which this script already needs, rather than
-# sha256sum: macOS ships shasum instead, and the asset is over 600 MB.
+# sha256sum: macOS ships shasum instead, and streaming keeps the large asset
+# out of memory.
 sha256_of() {
   node -e 'const h = require("crypto").createHash("sha256");
     require("fs").createReadStream(process.argv[1])
@@ -168,6 +169,27 @@ refuse_unless_absent() {
   fi
 }
 
+# Every central-directory entry of the asset that is not under $1.
+missing_entries() {
+  unzip -Z1 "$ASSET_PATH" | while IFS= read -r entry; do
+    [ -e "$1/$entry" ] || [ -L "$1/$entry" ] || printf '%s\n' "$entry"
+  done
+}
+
+# Info-ZIP exit 1 means warnings, and those include entries it skipped
+# (unsupported compression, unknown password). Some release assets exit 1
+# only because local and central filenames differ, which unzip resolves to
+# the central name. So 1 passes only when every archive entry is on disk;
+# 2 and up (format, I/O, unsupported method, missing archive) fail.
+extract_asset() {
+  local status=0 missing
+  unzip -o "$ASSET_PATH" -d "$1/" || status=$?
+  [ "$status" -le 1 ] || fail "unzip exit ${status} extracting ${ASSET}"
+  [ "$status" -eq 1 ] || return 0
+  missing=$(missing_entries "$1") || fail "cannot list the entries of ${ASSET}"
+  [ -z "$missing" ] || fail "unzip exit 1 left entries of ${ASSET} unextracted: ${missing}"
+}
+
 # A sibling of INSTALL_DIR, so a failed run installs nothing and the move
 # into place is a rename within one filesystem. version.json goes last,
 # after the binary check, so no partial tree is ever recorded.
@@ -176,7 +198,7 @@ stage_install() {
   parent=$(dirname -- "$INSTALL_DIR")
   mkdir -p -- "$parent"
   STAGE_DIR=$(mktemp -d "${parent}/.camoufox-stage.XXXXXX")
-  unzip -o "$ASSET_PATH" -d "$STAGE_DIR/"
+  extract_asset "$STAGE_DIR"
   chmod -R 755 "$STAGE_DIR"
   binary_ok "$STAGE_DIR" || fail "no usable camoufox-bin after extracting ${ASSET}"
   printf '{"version":"%s","release":"%s"}' "${EXPECTED%%-*}" "${EXPECTED#*-}" > "$STAGE_DIR/version.json"

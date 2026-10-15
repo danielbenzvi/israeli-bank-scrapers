@@ -953,13 +953,25 @@ jobs:
   # 1.61.0 `setDefaultViewport` regression slipped onto main because a
   # dependency-only PR skipped this job).
   # Waits for the Browser stack contract: a broken stack skips it.
+  # Its first step runs the runtime contract alone (routing and
+  # multi-value headers through the real Camoufox), so a client/browser
+  # pair that breaks them fails with the invariant named before the
+  # full suite starts. `--runTestsByPath` selects the one file: an
+  # extra `--testPathPatterns` would be ORed with the script's own.
+  # 20 minutes: in one Linux container the Camoufox 156 build ran the
+  # suite 1.5x slower than 152 (363 s vs 240 s). The cache keeps only
+  # the asset, so each job's first launch also fetches uBlock Origin
+  # from addons.mozilla.org: 9-18 s in later runs, 113 s once. With
+  # that host unreachable every launch retries for ~25 s, and the suite
+  # still passed in 334 s. A cold cache also downloads a larger asset.
+  # That projects to ~6 minutes here, under a third of the limit.
   # ──────────────────────────────────────────────────────────────
   e2e-mocked:
     name: E2E mocked
     needs: [changes, browser-stack]
     if: needs.changes.outputs.full_suite == 'true' || needs.changes.outputs.deps == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     permissions:
       contents: read
     steps:
@@ -969,6 +981,8 @@ jobs:
       - uses: $/.github/actions/setup-test-runner
         with:
           gh-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Browser stack runtime contract
+        run: npm run test:e2e:mock -- --ci --verbose --runTestsByPath src/Tests/E2eMocked/BrowserStackContract.e2e-mocked.test.ts
       - name: E2E mocked tests
         run: npm run test:e2e:mock -- --ci --verbose
 

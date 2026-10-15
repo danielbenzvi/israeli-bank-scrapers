@@ -12,7 +12,9 @@
  * in place of a kept copy that failed the hash, leave anything else at that
  * name alone, and report `downloaded` for the action's cache save; install
  * only into an absolute directory that does not exist yet, refusing any
- * other before the download; extract into a staging dir and rename it into
+ * other before the download; extract into a staging dir, passing unzip's
+ * warnings exit 1 only when every listed entry is on disk and failing any
+ * higher status, and rename it into
  * place only after the binary checks out, never into a directory that
  * appeared meanwhile; never print the token, never record a version it did
  * not install, and install nothing when the manifest is invalid.
@@ -72,6 +74,14 @@ const NOT_ABSOLUTE = 'CAMOUFOX_INSTALL_DIR must be an absolute path';
 
 /** Archive contents the script must refuse to record as installed. */
 const UNUSABLE_ARCHIVES: readonly BinaryEntry[] = ['nothing', 'directory'];
+/** Info-ZIP's warning status: a complete extract, or one that skipped entries. */
+const UNZIP_WARNINGS = 1;
+/** An archive entry the `unzip` stub lists but never extracts; the space is deliberate. */
+const SKIPPED_ENTRY = 'fonts/Noto Sans JP.ttf';
+/** A failing `unzip -Z1` listing. */
+const LIST_FAILURE = 3;
+/** Info-ZIP error statuses: format, severe format, unsupported method. */
+const UNZIP_ERRORS: readonly number[] = [2, 3, 81];
 
 /** Every asset-dir state. */
 const ASSET_CACHES: readonly AssetCache[] = [
@@ -395,9 +405,33 @@ describe('install-camoufox/install.sh', () => {
     expect([run.keptSha256, run.ghOutput]).toEqual([STUB_ASSET_SHA256, 'downloaded=true\n']);
   });
 
-  it('[ICS-16] an unzip error part-way through installs nothing', () => {
-    const run = install({ ...COLD, unzipExit: 3 });
-    expect(run.status).toBe(3);
+  it.each(UNZIP_ERRORS)('[ICS-16] unzip exit %d fails, naming it, and installs nothing', code => {
+    const run = install({ ...COLD, unzipExit: code });
+    expect(run.status).toBe(1);
+    expect(run.output).toContain(`ERROR: unzip exit ${String(code)} extracting ${SAMPLE_ASSET}`);
+    expect(run.installDirExists).toBe(false);
+  });
+
+  it('[ICS-26] unzip warnings after a complete extract still install the pin', () => {
+    const run = install({ ...COLD, unzipExit: UNZIP_WARNINGS });
+    const tools = run.calls.map(call => call.split(' ').slice(0, 2).join(' '));
+    expect(run.status).toBe(0);
+    expect(tools).toEqual(['curl -fsSL', 'unzip -o', 'unzip -Z1']);
+    expect([run.versionJson, run.binaryText]).toEqual([SAMPLE_VERSION_JSON, INSTALLED_BINARY]);
+  });
+
+  it('[ICS-27] unzip exit 1 that skipped an entry fails, even with a binary extracted', () => {
+    const run = install({ ...COLD, unzipExit: UNZIP_WARNINGS, skippedEntry: SKIPPED_ENTRY });
+    expect(run.status).toBe(1);
+    expect(run.output).toContain(`ERROR: unzip exit 1 left entries of ${SAMPLE_ASSET}`);
+    expect(run.output).toContain(`unextracted: ${SKIPPED_ENTRY}`);
+    expect(run.installDirExists).toBe(false);
+  });
+
+  it('[ICS-28] unzip exit 1 with an unreadable entry list fails closed', () => {
+    const run = install({ ...COLD, unzipExit: UNZIP_WARNINGS, listExit: LIST_FAILURE });
+    expect(run.status).toBe(1);
+    expect(run.output).toContain(`ERROR: cannot list the entries of ${SAMPLE_ASSET}`);
     expect(run.installDirExists).toBe(false);
   });
 

@@ -97,18 +97,56 @@ The script is idempotent and never fails an install — re-running it on an
 already-guarded tree is a no-op. Set `SKIP_PLAYWRIGHT_CORE_PATCH=1` to opt out
 entirely if you manage `playwright-core` patches yourself.
 
-To check that the guard is in place, add `--strict`. It exits 0 only when each
-read is guarded at exactly the 2 sites the reviewed `playwright-core` has (the
-BrowserContext dispatcher and the trace recorder). Otherwise it exits 1 and
-prints `GUARD-SITES <index> <found>/<reviewed> <unguarded read>` for each read
-off that count. A count other than 0 usually means your `playwright-core` build
-moved a site, so its pageError reads need a fresh review.
+The copy that matters is the one Camoufox's launcher, `camoufox-js`, loads. A
+dependency tree can hold more than one `playwright-core`: one nested under
+`camoufox-js`, another hoisted at a different version, or pnpm symlinks. The
+script patches each distinct copy, the one this package resolves and the one
+`camoufox-js` resolves. When there are two, each copy's lines follow a
+`playwright-core copy: <path>` header.
+
+To check that the guard is in place, add `--strict`. It exits 0 only when, in
+every copy, each read is guarded at exactly the 2 sites the reviewed
+`playwright-core` has (the BrowserContext dispatcher and the trace recorder).
+Otherwise it exits 1 and prints
+`GUARD-SITES <index> <found>/<reviewed> <unguarded read>` for each read off
+that count. A count other than 0 usually means your `playwright-core` build
+moved a site, so its pageError reads need a fresh review. It also exits 1 when
+any `pageError.location` read is left unguarded, whether written with `.`,
+`?.` on `pageError`, or quoted brackets, printing
+`GUARD-LEFT <count> unguarded pageError.location read(s)`. The check reads
+text, so a mention inside a comment also fails it.
 
 !!! note "Why a `scripts/` path exists in an installed package"
     Only `lib/**` ships normally. `scripts/patch-playwright-core.mjs` is the
     one deliberate exception in the package `files` allowlist, because the
     `postinstall` hook has to be able to run it from `node_modules`. No other
     repo script is published.
+
+## `Protocol error (Network.setRequestInterception)`
+
+A `page.route()` call fails with:
+
+```text
+Protocol error (Network.setRequestInterception): ERROR: failed to call method 'Network.setRequestInterception' with parameters {
+```
+
+`playwright-core` 1.64 added a `bypassServiceWorker` field to that call, and
+no released Camoufox accepts it. `context.route()` is unaffected: Firefox turns
+on context-wide interception through `Browser.setRequestInterception`, which did
+not change. The same `postinstall` script from the previous section rewrites
+the call to send `{ enabled }` alone, as 1.63 did. If you installed with
+`--ignore-scripts`, run it by hand with the command shown there.
+
+Under `--strict` the call must be sent at exactly 1 site, in that form. Every
+mention of `Network.setRequestInterception` counts as a send, whatever its
+quoting or line breaks, so a send the rewrite cannot read still fails the
+check. A mismatch prints
+`SHIM-SITES <shimmed>/<reviewed> (<sent> sent) <shimmed form>`, which means
+your `playwright-core` build changed the call and needs a fresh review.
+
+The shim restores routing only. 1.64 also changed how multi-value `Set-Cookie`
+headers are reported, so this library is still tested against the
+`playwright-core` minor pinned in `browser-stack.json`.
 
 ## `WAF_BLOCKED`
 

@@ -21,14 +21,29 @@
  *   BSW-6  every wiring mutant changes at least one row
  *   BSW-7  the commands it runs exist: the `lint:browser-stack` script and the
  *          patcher's `--strict` flag
+ *   BSW-8  E2E mocked runs the runtime contract file alone, unconditionally,
+ *          before its full suite, and that file exists
+ *   BSW-9  that file's setup, which takes the job's first Camoufox launch, is
+ *          bounded only by the shared first-launch bound, read from the syntax
+ *          tree, and that bound outlasts the one the launcher applies, default
+ *          or raised by `CAMOUFOX_LAUNCH_TIMEOUT_MS`, so a slow launch fails
+ *          with the launcher's error
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import * as ts from 'typescript';
 import { parse } from 'yaml';
 
+import {
+  CAMOUFOX_LAUNCH_TIMEOUT_ENV,
+  DEFAULT_CAMOUFOX_LAUNCH_TIMEOUT_MS,
+  resolveLaunchTimeoutMs,
+} from '../../../../Scrapers/Pipeline/Mediator/Browser/CamoufoxLauncher.js';
+import { firstLaunchHookTimeoutMs } from '../../../E2eMocked/Helpers/BrowserFixture.js';
+import { captureEnvVar, restoreEnvVar } from '../../../Helpers/AmbientEnv.js';
 import type { IGhaStatus, INeed } from '../../../Helpers/GhaExpression.js';
 import { evaluateIf, jobStatus } from '../../../Helpers/GhaExpression.js';
 
@@ -55,6 +70,40 @@ const EXPECTED_STEPS = [
 
 /** The steps whose outcome is the gate's verdict. */
 const CHECK_STEPS = EXPECTED_STEPS.slice(3);
+
+/** The runtime contract E2E mocked runs on its own first. */
+const CONTRACT_TEST = 'src/Tests/E2eMocked/BrowserStackContract.e2e-mocked.test.ts';
+
+/** The fixture function that takes the shared browser's first launch. */
+const SHARED_LAUNCH = 'getSharedBrowser';
+
+/** The Jest hook a file launches the shared browser in. */
+const SETUP_HOOK = 'beforeAll';
+
+/** A launching hook bounded at 1 ms, with the expected bound only in a comment. */
+const PLANTED_COMMENT_BOUND = [
+  'beforeAll(async () => {',
+  '  browser = await getSharedBrowser();',
+  '  /* keep:',
+  '}, firstLaunchHookTimeoutMs());',
+  '  */',
+  '}, 1);',
+].join('\n');
+
+/** A launch bound raised above the default, as docs/quick-start.md allows on a slow link. */
+const RAISED_LAUNCH_MS = 600_000;
+
+/** Launcher bounds the hook must outlast: label, env value, resulting bound. */
+const LAUNCH_BOUNDS = [
+  ['the default', undefined, DEFAULT_CAMOUFOX_LAUNCH_TIMEOUT_MS],
+  ['a raised', String(RAISED_LAUNCH_MS), RAISED_LAUNCH_MS],
+] as const;
+
+/** E2E mocked's commands: the runtime contract alone, then the full suite. */
+const E2E_MOCKED_RUNS = [
+  `npm run test:e2e:mock -- --ci --verbose --runTestsByPath ${CONTRACT_TEST}`,
+  'npm run test:e2e:mock -- --ci --verbose',
+];
 
 /** Where a step's `if:` is checked: every earlier step succeeded. */
 const STEP_STATUS: IGhaStatus = { success: true, failure: false, cancelled: false };
@@ -348,6 +397,95 @@ const MUTANTS: readonly (readonly [string, string, IJob])[] = [
   ['the checks key on full_suite', GATE, stepsUnder("needs.changes.outputs.full_suite == 'true'")],
 ];
 
+/**
+ * Whether a node is a call to the named function.
+ *
+ * @param node - Any node.
+ * @param name - Function name as written at the call.
+ * @returns True for `name(...)`.
+ */
+function isCallTo(node: ts.Node, name: string): node is ts.CallExpression {
+  return ts.isCallExpression(node) && node.expression.getText() === name;
+}
+
+/**
+ * Whether a node or any descendant calls the named function.
+ *
+ * @param node - Root node.
+ * @param name - Function name as written at the call.
+ * @returns True when some call in the subtree is to `name`.
+ */
+function callsWithin(node: ts.Node, name: string): boolean {
+  if (isCallTo(node, name)) return true;
+  return node.getChildren().some((child): boolean => callsWithin(child, name));
+}
+
+/**
+ * Whether a hook's setup function launches the shared browser.
+ *
+ * @param hook - A `beforeAll(...)` call.
+ * @returns True when its first argument calls {@link SHARED_LAUNCH}.
+ */
+function launchesShared(hook: ts.CallExpression): boolean {
+  const setup = hook.arguments.at(0);
+  return setup !== undefined && callsWithin(setup, SHARED_LAUNCH);
+}
+
+/**
+ * The bound a hook passes Jest, as written, following a top-level `const`
+ * to its initializer.
+ *
+ * @param hook - A `beforeAll(...)` call.
+ * @param consts - Top-level `const` initializers by name.
+ * @returns The bound's source text; empty when the hook passes none.
+ */
+function boundOf(hook: ts.CallExpression, consts: ReadonlyMap<string, string>): string {
+  const bound = hook.arguments.at(1);
+  if (bound === undefined) return '';
+  const text = bound.getText();
+  return consts.get(text) ?? text;
+}
+
+/**
+ * Whether a top-level variable statement declares with `const`.
+ *
+ * @param statement - A variable statement.
+ * @returns True for `const`, false for `let` and `var`.
+ */
+function isConstStatement(statement: ts.VariableStatement): boolean {
+  return statement.declarationList.getFirstToken()?.kind === ts.SyntaxKind.ConstKeyword;
+}
+
+/**
+ * The initializer of every top-level `const`, by name, as written.
+ *
+ * @param file - Parsed source.
+ * @returns Initializer source text by declared name.
+ */
+function constInitializers(file: ts.SourceFile): ReadonlyMap<string, string> {
+  const statements = file.statements.filter(ts.isVariableStatement).filter(isConstStatement);
+  const declarations = statements.flatMap(s => [...s.declarationList.declarations]);
+  const entries = declarations.map((d): readonly [string, string] => {
+    return [d.name.getText(), d.initializer?.getText() ?? ''];
+  });
+  return new Map(entries);
+}
+
+/**
+ * The bounds of every top-level `beforeAll` that launches the shared browser,
+ * read from the syntax tree so comments and strings cannot stand in for them.
+ *
+ * @param source - Jest file source.
+ * @returns One bound per launching hook, in source order.
+ */
+function launchHookBounds(source: string): readonly string[] {
+  const file = ts.createSourceFile('contract.ts', source, ts.ScriptTarget.Latest, true);
+  const consts = constInitializers(file);
+  const calls = file.statements.filter(ts.isExpressionStatement).map(s => s.expression);
+  const hooks = calls.filter((call): call is ts.CallExpression => isCallTo(call, SETUP_HOOK));
+  return hooks.filter(launchesShared).map(hook => boundOf(hook, consts));
+}
+
 describe('BrowserStackGateWiring', () => {
   it('[BSW-1] needs only changes, has no job-level if and reads only the repository', () => {
     const job = jobOf(JOBS, GATE);
@@ -401,4 +539,41 @@ describe('BrowserStackGateWiring', () => {
     expect(scripts[CHECK_SCRIPT]).toBe('node scripts/check-browser-stack.mjs');
     expect(patcher).toContain("const STRICT_FLAG = '--strict';");
   });
+
+  it('[BSW-8] E2E mocked runs the runtime contract alone before the full suite', () => {
+    const job = jobOf(JOBS, 'e2e-mocked');
+    const runSteps = (job.steps ?? []).filter(step => step.run !== undefined);
+    const runs = runSteps.map(signatureOf);
+    const contractKeys = Object.keys(runSteps[0] ?? {});
+    const contractPath = join(REPO_ROOT, CONTRACT_TEST);
+    const isContractPresent = existsSync(contractPath);
+    expect(runs).toStrictEqual(E2E_MOCKED_RUNS);
+    expect(contractKeys).toStrictEqual(['name', 'run']);
+    expect(isContractPresent).toBe(true);
+  });
+
+  it('[BSW-9] the contract launches in one hook bounded by the shared bound', () => {
+    const contractPath = join(REPO_ROOT, CONTRACT_TEST);
+    const contract = readFileSync(contractPath, 'utf8');
+    const bounds = launchHookBounds(contract);
+    expect(bounds).toStrictEqual(['firstLaunchHookTimeoutMs()']);
+  });
+
+  it('[BSW-9] reads the bound the hook passes, not text in a comment', () => {
+    const bounds = launchHookBounds(PLANTED_COMMENT_BOUND);
+    expect(bounds).toStrictEqual(['1']);
+  });
+
+  it.each(LAUNCH_BOUNDS)(
+    '[BSW-9] the shared bound outlasts %s launch bound',
+    (_label, value, launcherMs) => {
+      const ambient = captureEnvVar(CAMOUFOX_LAUNCH_TIMEOUT_ENV);
+      restoreEnvVar({ name: CAMOUFOX_LAUNCH_TIMEOUT_ENV, value });
+      const appliedMs = resolveLaunchTimeoutMs();
+      const hookMs = firstLaunchHookTimeoutMs();
+      restoreEnvVar(ambient);
+      expect(appliedMs).toBe(launcherMs);
+      expect(hookMs).toBeGreaterThan(launcherMs);
+    },
+  );
 });
