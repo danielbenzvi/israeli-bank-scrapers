@@ -9,6 +9,7 @@ import {
 import type { Brand, DurationMs } from '../../Types/Brand.js';
 import { mintDurationMs } from '../../Types/Brand.js';
 import { timeoutPromise } from '../Timing/TimingActions.js';
+import { checkBrowserStack } from './BrowserStackCheck.js';
 
 export { ISRAEL_LOCALE } from '../../../../Common/Config/BrowserConfig.js';
 
@@ -313,6 +314,58 @@ function closeAbandonedLaunch(launch: Promise<Browser>): Promise<boolean> {
 }
 
 /**
+ * Start Camoufox within {@link resolveLaunchTimeoutMs}'s bound, disposing of
+ * a browser that arrives after the bound elapsed.
+ *
+ * @param headless - Whether to launch in headless mode.
+ * @returns A Playwright-compatible Browser instance.
+ */
+async function boundedStart(headless: boolean): Promise<Browser> {
+  const launch = startCamoufox(headless);
+  const timeoutMs = resolveLaunchTimeoutMs();
+  try {
+    return await withLaunchBound(launch, timeoutMs);
+  } catch (error) {
+    closeAbandonedLaunch(launch).catch(() => false);
+    throw withNativeBindingDiagnostic(error);
+  }
+}
+
+/**
+ * Upper bound on the browser-stack check after a launch, in milliseconds.
+ * The check only reads two installed versions and settles far sooner; the
+ * bound matters only if its promise ever stays pending, so the caller still
+ * gets the browser. It is a timer, so it bounds only asynchronous waiting:
+ * it cannot interrupt the readers' synchronous reads of the Camoufox version
+ * file and the two package manifests. A file system that stalls during them
+ * blocks the event loop and this deadline with it, as it would block
+ * camoufox-js's own synchronous reads of the same install at launch.
+ */
+export const STACK_CHECK_DEADLINE_MS = 2_000;
+
+/** What a timed-out browser-stack check reports; it is swallowed. */
+const STACK_CHECK_LABEL = 'browser-stack check';
+
+/**
+ * Run the browser-stack check without letting it cost the caller a launched
+ * browser. The check is advisory and is built never to reject; if it ever
+ * rejected or never settled, an unguarded await would withhold the live
+ * browser with no reference left to close it, so it is bounded by
+ * {@link STACK_CHECK_DEADLINE_MS} and every failure is swallowed. Nothing is
+ * logged, since a throwing logger is one way the check can fail.
+ *
+ * @returns Resolves once the check settled or its deadline passed.
+ */
+async function checkStackSafely(): Promise<void> {
+  try {
+    const checking = checkBrowserStack();
+    await timeoutPromise(STACK_CHECK_DEADLINE_MS, checking, STACK_CHECK_LABEL);
+  } catch {
+    // Advisory only: the launched browser must still reach the caller.
+  }
+}
+
+/**
  * Launch a Camoufox browser (Firefox with C++-level anti-detect stealth).
  * Uses dynamic import() because camoufox-js is ESM-only.
  *
@@ -340,18 +393,19 @@ function closeAbandonedLaunch(launch: Promise<Browser>): Promise<boolean> {
  * {@link closeAbandonedLaunch} disposes of a browser that still arrives
  * after the bound elapsed.
  *
+ * <p>After a successful launch, {@link checkBrowserStack} warns once per
+ * process when the installed Camoufox or playwright-core is not the tested
+ * pair. It runs outside the launch bound, under its own short deadline, and
+ * never fails the launch: {@link checkStackSafely} hands the browser back
+ * even if the check rejects or never settles.
+ *
  * @param headless - Whether to launch in headless mode.
  * @returns A Playwright-compatible Browser instance.
  * @throws Error naming the native-binding remedy when better-sqlite3 is
  *   unavailable, or {@link launchTimeoutMessage} when the bound elapses.
  */
 export async function launchCamoufox(headless: boolean): Promise<Browser> {
-  const launch = startCamoufox(headless);
-  const timeoutMs = resolveLaunchTimeoutMs();
-  try {
-    return await withLaunchBound(launch, timeoutMs);
-  } catch (error) {
-    closeAbandonedLaunch(launch).catch(() => false);
-    throw withNativeBindingDiagnostic(error);
-  }
+  const browser = await boundedStart(headless);
+  await checkStackSafely();
+  return browser;
 }
