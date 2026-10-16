@@ -5,6 +5,7 @@ source-files:
   - .github/workflows/pr-body-check.yml
   - .github/workflows/codeql.yml
   - .github/workflows/cache-cleanup.yml
+  - .github/workflows/browser-stack-watch.yml
   - .github/scripts/ci/detect-changes.sh
   - scripts/check-browser-stack.mjs
   - scripts/browser-stack/gate-pins.mjs
@@ -180,6 +181,15 @@ numeric `N` is ever deleted, so `main`'s caches are out of reach. A failed
 delete is re-checked: if another run already removed the caches, the job
 still passes; if any are left, it fails. `CacheCleanupGate.test.ts` runs the
 committed script against a stubbed `gh` to pin all of this.
+
+## The browser stack is watched weekly
+
+`.github/workflows/browser-stack-watch.yml` is not a gate, and no PR runs it.
+Every Monday it reports whether the Browser stack gate accepts the consumer
+`playwright-core` × Camoufox pair, and whether CI tests the release
+camoufox-js installs. The report is the body of
+one issue labelled `browser-stack`. See
+[Browser stack](../architecture/browser-stack.md#the-weekly-watch).
 
 ## Static checks
 

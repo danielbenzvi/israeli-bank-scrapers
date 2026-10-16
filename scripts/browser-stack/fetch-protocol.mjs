@@ -1,10 +1,14 @@
 /**
- * Bounded HTTPS fetch of one Juggler `Protocol.js` for the browser-stack gate.
+ * Bounded HTTPS fetch for the browser-stack scripts.
  *
- * Only `https://raw.githubusercontent.com` is reachable, redirect hops
- * included. Each attempt has a timeout; network errors (timeouts included),
- * HTTP 5xx and HTTP 429 (rate limited) are retried with backoff, any other
- * 4xx never is, and the body is capped while it streams. Every failure is a
+ * A policy names the reachable hosts, the body cap and any request headers.
+ * The gate's policy, used by {@link fetchProtocol}, reaches only
+ * `https://raw.githubusercontent.com` with a {@link MAX_BODY_BYTES} cap; the
+ * weekly watch reads the GitHub and npm APIs under policies of its own.
+ * Every hop, redirects included, must be HTTPS on a policy host. Each attempt
+ * has a timeout; network errors (timeouts included), HTTP 5xx and HTTP 429
+ * (rate limited) are retried with backoff, any other 4xx never is, and the
+ * body is capped while it streams. Every failure is a
  * {@link FetchFailedError}, which the gate reports as infrastructure
  * (exit 2) — never as a pass.
  *
@@ -16,7 +20,10 @@ import { setTimeout as delay } from 'node:timers/promises';
 
 /**
  * @typedef {import('./gate.d.mts').IFetchIo} IFetchIo
- * @typedef {Required<IFetchIo>} FetchIo - Fetch I/O, defaults filled in.
+ * @typedef {import('./fetch-protocol.d.mts').IFetchPolicy} IFetchPolicy
+ * @typedef {import('./fetch-protocol.d.mts').IFetchedBody} IFetchedBody
+ * @typedef {Required<IFetchIo> & { readonly policy: IFetchPolicy }} FetchIo
+ *   - Fetch I/O, defaults and policy filled in.
  * @typedef {FetchIo & { readonly signal: AbortSignal }} AttemptIo - I/O of one attempt.
  */
 
@@ -27,7 +34,11 @@ export const ALLOWED_HOST = 'raw.githubusercontent.com';
 export const MAX_BODY_BYTES = 524_288;
 
 /** Waits before the 2nd and 3rd attempt; its length + 1 is the attempt cap. */
-const BACKOFF_MS = Object.freeze([1000, 2000]);
+export const BACKOFF_MS = Object.freeze([1000, 2000]);
+
+/** Timeout of one attempt unless the caller sets `timeoutMs`. */
+export const ATTEMPT_TIMEOUT_MS = 15_000;
+
 const MAX_REDIRECTS = 3;
 const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308]);
 
@@ -40,14 +51,21 @@ const CAMOUFOX_ROOTS = Object.freeze(['browser/additions', 'additions']);
 /** Final, non-retryable failure reasons. */
 const REASONS = Object.freeze({
   redirects: `redirected more than ${MAX_REDIRECTS} times`,
-  size: `body exceeds ${MAX_BODY_BYTES} bytes`,
+  size: (/** @type {number} */ maxBytes) => `body exceeds ${maxBytes} bytes`,
+});
+
+/** The gate's policy: raw GitHub files only, about 40 KiB each. */
+const GATE_POLICY = Object.freeze({
+  hosts: Object.freeze([ALLOWED_HOST]),
+  maxBodyBytes: MAX_BODY_BYTES,
+  headers: Object.freeze({}),
 });
 
 /** Production I/O; callers override any member. */
 const DEFAULT_IO = Object.freeze({
   fetchImpl: (/** @type {string} */ url, /** @type {RequestInit} */ init) => fetch(url, init),
   sleep: (/** @type {number} */ ms) => delay(ms),
-  timeoutMs: 15_000,
+  timeoutMs: ATTEMPT_TIMEOUT_MS,
 });
 
 /** A fetch that cannot yield a trustworthy body. */
@@ -81,11 +99,11 @@ export function protocolUrls(playwright, tag) {
   };
 }
 
-/** The URL when it is HTTPS on the allowlisted host; throws otherwise. */
-function allowed(/** @type {string} */ href) {
+/** The URL when it is HTTPS on a policy host; throws otherwise. */
+function allowed(/** @type {string} */ href, /** @type {readonly string[]} */ hosts) {
   const url = new URL(href);
-  if (url.protocol === 'https:' && url.host === ALLOWED_HOST) return url.href;
-  throw new FetchFailedError(href, `is not allowlisted (only https://${ALLOWED_HOST})`);
+  if (url.protocol === 'https:' && hosts.includes(url.host)) return url.href;
+  throw new FetchFailedError(href, `is not allowlisted (only https://${hosts.join(', https://')})`);
 }
 
 /** @type {(response: Response) => string | null} Location of a redirect, else null. */
@@ -101,7 +119,10 @@ const locationOf = response =>
  * @returns {Promise<Response>} The final response.
  */
 async function follow(href, io, hops) {
-  const response = await io.fetchImpl(allowed(href), { redirect: 'manual', signal: io.signal });
+  const { hosts, headers } = io.policy;
+  /** @type {RequestInit} */
+  const init = { redirect: 'manual', signal: io.signal, headers };
+  const response = await io.fetchImpl(allowed(href, hosts), init);
   const location = locationOf(response);
   if (location === null) return response;
   await response.body?.cancel();
@@ -109,13 +130,17 @@ async function follow(href, io, hops) {
   return follow(new URL(location, href).href, io, hops + 1);
 }
 
-/** Body bytes, refusing more than {@link MAX_BODY_BYTES} while streaming. */
-async function readCapped(/** @type {string} */ href, /** @type {Response} */ response) {
+/** Body bytes, refusing more than `maxBytes` while streaming. */
+async function readCapped(
+  /** @type {string} */ href,
+  /** @type {Response} */ response,
+  /** @type {number} */ maxBytes,
+) {
   const chunks = [];
   let size = 0;
   for await (const chunk of response.body ?? []) {
     size += chunk.byteLength;
-    if (size > MAX_BODY_BYTES) throw new FetchFailedError(href, REASONS.size);
+    if (size > maxBytes) throw new FetchFailedError(href, REASONS.size(maxBytes));
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
@@ -156,7 +181,7 @@ async function attempt(/** @type {string} */ href, /** @type {FetchIo} */ io) {
   try {
     const response = await follow(href, { ...io, signal: AbortSignal.timeout(io.timeoutMs) }, 0);
     if (!response.ok) return await statusFailure(href, response);
-    return { bytes: await readCapped(href, response) };
+    return { bytes: await readCapped(href, response, io.policy.maxBodyBytes) };
   } catch (error) {
     if (error instanceof FetchFailedError) return { failure: error, retry: false };
     return {
@@ -166,28 +191,63 @@ async function attempt(/** @type {string} */ href, /** @type {FetchIo} */ io) {
   }
 }
 
-/** @type {(bytes: Buffer) => { text: string, sha256: string }} */
+/** @type {(bytes: Buffer) => IFetchedBody} */
 const digest = bytes => ({
   text: bytes.toString('utf8'),
   sha256: createHash('sha256').update(bytes).digest('hex'),
 });
 
 /**
- * Fetch one schema under the gate's policy.
+ * Fetch one body under `policy`.
  *
- * @param {string} href - Absolute URL on {@link ALLOWED_HOST}.
+ * @param {string} href - Absolute HTTPS URL on a policy host.
+ * @param {IFetchPolicy} policy - Reachable hosts, body cap and request headers.
  * @param {IFetchIo} [overrides] - Test I/O.
- * @returns {Promise<{ text: string, sha256: string }>} Body text and the sha256 of its bytes.
+ * @returns {Promise<IFetchedBody>} Body text and the sha256 of its bytes.
  * @throws {FetchFailedError} When no attempt yields a body.
  */
-export async function fetchProtocol(href, overrides = {}) {
-  const io = { ...DEFAULT_IO, ...overrides };
+export async function fetchBounded(href, policy, overrides = {}) {
+  const io = { ...DEFAULT_IO, ...overrides, policy };
   for (let index = 0; ; index += 1) {
     const outcome = await attempt(href, io);
     if (outcome.bytes !== undefined) return digest(outcome.bytes);
     if (!outcome.retry || index === BACKOFF_MS.length) throw outcome.failure;
     await io.sleep(BACKOFF_MS[index]);
   }
+}
+
+/**
+ * Fetch one JSON body under `policy`.
+ *
+ * @param {string} href - Absolute HTTPS URL on a policy host.
+ * @param {IFetchPolicy} policy - Reachable hosts, body cap and request headers.
+ * @param {IFetchIo} [overrides] - Test I/O.
+ * @returns {Promise<unknown>} The parsed body; its shape is the caller's to check.
+ * @throws {FetchFailedError} When no attempt yields a body, or the body is not JSON.
+ */
+export async function fetchJson(href, policy, overrides = {}) {
+  const { text } = await fetchBounded(href, policy, overrides);
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new FetchFailedError(href, 'is not JSON');
+  }
+}
+
+/** @type {(value: unknown) => value is Record<string, unknown>} A JSON object: not null, not a list. */
+export const isJsonObject = value =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+/**
+ * Fetch one schema under the gate's policy.
+ *
+ * @param {string} href - Absolute URL on {@link ALLOWED_HOST}.
+ * @param {IFetchIo} [overrides] - Test I/O.
+ * @returns {Promise<IFetchedBody>} Body text and the sha256 of its bytes.
+ * @throws {FetchFailedError} When no attempt yields a body.
+ */
+export function fetchProtocol(href, overrides = {}) {
+  return fetchBounded(href, GATE_POLICY, overrides);
 }
 
 /** @type {(error: unknown) => boolean} Whether a fetch failed with a final HTTP 404. */
@@ -198,7 +258,7 @@ const isNotFound = error => error instanceof FetchFailedError && error.status ==
  *
  * @param {string[]} hrefs - Candidate URLs, most likely first.
  * @param {IFetchIo} [overrides] - Test I/O.
- * @returns {Promise<{ text: string, sha256: string }>} Body text and the sha256 of its bytes.
+ * @returns {Promise<IFetchedBody>} Body text and the sha256 of its bytes.
  * @throws {FetchFailedError} On a non-404 failure, or a 404 at every candidate.
  */
 export async function fetchFirst(hrefs, overrides = {}) {

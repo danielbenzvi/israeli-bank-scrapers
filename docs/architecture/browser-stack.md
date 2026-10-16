@@ -1,8 +1,16 @@
 ---
 title: Browser stack
 source-files:
+  - .github/dependabot.yml
+  - .github/workflows/browser-stack-watch.yml
   - browser-stack.json
+  - scripts/browser-stack-watch.mjs
+  - scripts/browser-stack/camoufox-releases.mjs
+  - scripts/browser-stack/fetch-protocol.mjs
   - scripts/browser-stack/gen-config.mjs
+  - scripts/browser-stack/playwright-versions.mjs
+  - scripts/browser-stack/watch-report.mjs
+  - scripts/browser-stack/watch.mjs
   - src/Scrapers/Pipeline/Mediator/Browser/BrowserStackConfig.ts
   - src/Scrapers/Pipeline/Mediator/Browser/BrowserStackCheck.ts
   - src/Scrapers/Pipeline/Mediator/Browser/CamoufoxLauncher.ts
@@ -96,6 +104,67 @@ The check runs after the launch bound, not inside it, for three reasons:
 uses `DEFAULT_STACK_READERS`, and tests inject their own `IStackReaders`. A
 check is a `BrowserStackCheck` that resolves to a `WarningCount`: 0, 1 or 2
 on the first call, and 0 after it.
+
+## The weekly watch
+
+Two things move upstream without a PR here: the `playwright-core` version a
+consumer's `^` range resolves to, and the Camoufox release camoufox-js
+downloads. Every Monday at 06:00 UTC,
+`.github/workflows/browser-stack-watch.yml` runs
+`scripts/browser-stack-watch.mjs` to report what the gate says about them.
+
+The watch reads two upstream sources:
+
+- **Camoufox releases.** It reads the page camoufox-js reads: the first page
+  of `daijro/camoufox` releases, 30 by default. It picks the release
+  camoufox-js would install by the same rule: the first one that is neither a
+  prerelease nor a draft and has an asset for the runner's platform, judged by
+  camoufox-js's own asset check. That check is the one in the camoufox-js the
+  lockfile installs. A newer camoufox-js in the library's `^` range reaches a
+  fresh consumer install first; Dependabot opens it as its own `camoufox`
+  group PR, which CI tests, and the watch judges with it once that PR lands.
+- **The `playwright-core` packument.** It takes the version a consumer's
+  install resolves from the library's own `dependencies['playwright-core']`
+  range in `package.json`, picked the way npm picks it: npm `latest` when it
+  satisfies the range, else the highest stable version that does. A
+  prerelease is never picked. Only a caret range `^X.Y.Z` is supported; any
+  other form exits 2 with `RANGE-UNSUPPORTED`.
+
+It runs the gate once, in `candidate` mode with `--json`, on that version ×
+the selected release: the consumer pair. It judges no
+other pair. The Dependabot PR's own `Browser stack contract` job judges the
+lockfile pair, and a prerelease or a later minor is for the PR that lands it.
+The report is written well inside the job's 15-minute limit even when every
+`Protocol.js` fetch times out on every attempt, or when the newest Camoufox
+layout answers 404 only on its last attempt and the older one then times out.
+The report has two sections:
+
+| Section | What it says |
+|---|---|
+| Consumer pair | The version the range resolves to × the selected release, and the gate's verdict: compatible; not compatible, with its NEW protocol paths; or unknown, with the gate's errors, when it could not decide. With no stable version in range, it says so. With no selected release, a consumer's Camoufox install fails. |
+| CI drift | Whether the tag in `browser-stack.json` is the selected release. |
+
+Compatible only means the Juggler protocols match within the accepted
+deltas. It does not make a pair landable: that still takes a PR that pins
+the pair and passes CI.
+
+The workflow keeps the report as the body of one open issue labelled
+`browser-stack` that the workflow opened. Each run edits that body and never
+comments, and an issue that a person labels keeps its body. The job holds
+`contents: read` and `issues: write` only. A manual run is a dry run unless
+`dry_run` is cleared: it prints the report to the log and the job summary and
+leaves the issue alone. When the watch cannot read its inputs (the manifest,
+the `playwright-core` range in `package.json`, the releases page or the
+packument) it exits 2, the job fails, and the issue keeps the previous report.
+A body that is not JSON, a packument whose `latest` tag is not in its version
+map, or a releases page whose releases or assets lack a field camoufox-js reads
+counts as unreadable: reading it anyway would report a missing version or
+release that upstream never removed.
+`BrowserStackWatch.test.ts` pins the report, `BrowserStackWatchBounds.test.ts`
+the time bound, and `BrowserStackWatchWiring.test.ts` the workflow.
+
+To run it locally, use `node scripts/browser-stack-watch.mjs [--out <file>]`;
+a `GITHUB_TOKEN` in the environment raises the GitHub API rate limit.
 
 ## Why the readers avoid JSON imports
 
