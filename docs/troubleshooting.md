@@ -112,10 +112,10 @@ accepts later minors, so a fresh install can resolve one newer than the tested
 minor. An
 `overrides` entry can also force one. Run `npm ls playwright-core` to see
 every copy that resolves. To get back to the tested minor, pin it in your own
-`package.json`, replacing `1.63` with the `tested` value from the log:
+`package.json`, replacing `1.64` with the `tested` value from the log:
 
 ```json
-"overrides": { "playwright-core": "~1.63.0" }
+"overrides": { "playwright-core": "~1.64.0" }
 ```
 
 A version that cannot be read, such as Camoufox before its first download,
@@ -129,7 +129,7 @@ of ours in the trace.
 This library listens for uncaught page errors. Playwright forwards every one of
 them and reads `pageError.location.url` **without a null check**, but Camoufox
 (Firefox) can report an uncaught error carrying no location — so the read
-throws. Upstream still ships the unguarded read as of `playwright-core` 1.62.1.
+throws. Upstream still ships the unguarded read as of `playwright-core` 1.64.1.
 
 A `postinstall` step adds the missing null guard for you. It is skipped when you
 install with `--ignore-scripts`, so apply it by hand:
@@ -139,8 +139,11 @@ node node_modules/@sergienko4/israeli-bank-scrapers/scripts/patch-playwright-cor
 ```
 
 The script is idempotent and never fails an install — re-running it on an
-already-guarded tree is a no-op. Set `SKIP_PLAYWRIGHT_CORE_PATCH=1` to opt out
-entirely if you manage `playwright-core` patches yourself.
+already-patched tree is a no-op. It writes the patched bundle to a scratch file
+beside it and renames that file over it, so a write that fails, for example on a
+full disk, leaves the original bundle whole and reports the copy as skipped. Set
+`SKIP_PLAYWRIGHT_CORE_PATCH=1` to opt out entirely if you manage
+`playwright-core` patches yourself.
 
 The copy that matters is the one Camoufox's launcher, `camoufox-js`, loads. A
 dependency tree can hold more than one `playwright-core`: one nested under
@@ -189,9 +192,15 @@ check. A mismatch prints
 `SHIM-SITES <shimmed>/<reviewed> (<sent> sent) <shimmed form>`, which means
 your `playwright-core` build changed the call and needs a fresh review.
 
-The shim restores routing only. 1.64 also changed how multi-value `Set-Cookie`
-headers are reported, so this library is still tested against the
-`playwright-core` minor pinned in `browser-stack.json`.
+The same script also keeps multi-value `Set-Cookie` headers one entry per
+cookie on 1.64. Camoufox reports a response's cookies as one header joined by
+newlines, which 1.63 split and 1.64 does not, so without the script
+`headersArray()` and `headerValues('set-cookie')` return one merged entry and
+nothing reports an error. The script splits `Set-Cookie` alone, at the one
+place the Firefox client builds a response. Under `--strict` that place must
+be found in a form the script knows; otherwise it prints
+`COOKIE-SITES <known>/<reviewed> (<sites> sites) <response site>`, which
+means your `playwright-core` build needs a fresh review.
 
 ## `WAF_BLOCKED`
 
