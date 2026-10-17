@@ -5,17 +5,18 @@
  * `npm i`, `npm install-test` and `npm update` as an unpinned download; only
  * `npm ci` and a git URL pinned to a full commit count as pinned. The scheduled
  * scan (`scorecard.yml`) raises those alerts only after a change has merged, so
- * the pull-request workflow runs the same engine, pinned by version and
- * checksum, over the merge tree: `.github/scripts/ci/scorecard-npm-pins.sh`,
- * run as a background step of the `Static checks` job, with
- * `check-scorecard-npm-pins.mjs` deciding the verdict.
+ * the pull-request workflow runs the same engine — the one the scan's action
+ * commit requires, verified by its SLSA provenance — over the merge tree:
+ * `.github/scripts/ci/scorecard-npm-pins.sh`, run as a background step of the
+ * `Static checks` job, with `check-scorecard-npm-pins.mjs` deciding the verdict.
  *
  * <p>Mirroring the engine rather than re-implementing its shell parser is the
  * point: the gate sees exactly what the scan sees. What this test pins is that
  * the gate stays a gate — that it can block a merge, cannot swallow its own
- * failure, verifies what it downloads before unpacking it, and moves its engine
- * with the scheduled scan's. It also keeps the release job's npm on a Node line
- * that bundles Trusted Publishing npm, so that job never has to download one.
+ * failure, verifies what it downloads before unpacking it, and takes its engine
+ * from the scheduled scan's, naming no version itself. It also keeps the
+ * release job's npm on a Node line that bundles Trusted Publishing npm, so that
+ * job never has to download one.
  */
 
 import { spawnSync } from 'node:child_process';
@@ -77,15 +78,49 @@ const CREDENTIAL = /secrets\.|github\.token|GH_TOKEN|GITHUB_TOKEN/;
 const SWALLOWED_FAILURE = /\|\|\s*(?:true|:)(?![\w-])|set \+e/;
 
 /** The verdict: the script's last command, so its exit status is the gate's. */
-const VERDICT_COMMAND = 'node "${CHECKER}" "${RESULT}" "v${SCORECARD_VERSION}"';
+const VERDICT_COMMAND = 'node "${CHECKER}" "${RESULT}" "${SCORECARD_VERSION}"';
 
 /** Lowest npm that can complete the Trusted Publishing OIDC exchange. */
 const TRUSTED_PUBLISHING_NPM = '11.5.1';
 /** First Node major whose bundled npm can reach that version. */
 const MIN_PUBLISH_NODE_MAJOR = 24;
 
-/** Engine the gate pins, as the scheduled scan's go.mod spells it. */
-const PINNED_ENGINE = 'v5.5.0';
+/**
+ * Engines a stub action go.mod can require. The gate names none itself, so
+ * any release version must work.
+ */
+const ENGINE = 'v5.6.0';
+const OTHER_ENGINE = 'v5.7.1';
+
+/** The commit the stub Go module proxy says a release was cut from. */
+const SOURCE_DIGEST = '61e84743356275f6ffca23b1b2f2cb945e19eb96';
+const ENGINE_REPO_URL = 'https://github.com/ossf/scorecard';
+const MODULE_PROXY_URL = 'https://proxy.golang.org/github.com/ossf/scorecard/v5/@v';
+const RELEASES_URL = `${ENGINE_REPO_URL}/releases/download`;
+
+/** Stands in for the scratch path of the provenance bundle in recorded `gh` args. */
+const BUNDLE_ARG = '<bundle>';
+
+/** What `gh attestation verify` must be told about the asset, after its path. */
+const PROVENANCE_POLICY = [
+  ['--bundle', BUNDLE_ARG],
+  ['--repo', 'ossf/scorecard'],
+  ['--predicate-type', 'https://slsa.dev/provenance/v0.2'],
+  ['--source-ref', `refs/tags/${ENGINE}`],
+  ['--source-digest', SOURCE_DIGEST],
+  [
+    '--signer-workflow',
+    'slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml',
+  ],
+  ['--cert-oidc-issuer', 'https://token.actions.githubusercontent.com'],
+  ['--deny-self-hosted-runners'],
+].flat();
+
+/** The asset `gh` verifies, for any platform the gate supports. */
+const ASSET_PATH = /\/scorecard_5\.6\.0_(?:linux|darwin)_(?:amd64|arm64)\.tar\.gz$/;
+
+/** What the gate says when the stub `gh` rejects the asset. */
+const PROVENANCE_REJECTED = 'failed provenance verification';
 
 /** What the gate says when scorecard.yml does not run exactly one action commit. */
 const PIN_REJECTED = 'expected one SHA-pinned ossf/scorecard-action';
@@ -144,6 +179,26 @@ interface IGateRun {
   readonly didExtract: boolean;
   /** The action go.mod URL the gate fetched, or empty when it fetched none. */
   readonly goModUrl: string;
+  /** Every URL the gate fetched, in order. */
+  readonly urls: readonly string[];
+  /** Arguments of the gate's `gh attestation verify`, or empty when it ran none. */
+  readonly verifyArgs: readonly string[];
+}
+
+/** What the stub downloads serve and how the stub `gh` answers. */
+type StubSettings = Readonly<Record<string, string>>;
+
+/** An action go.mod or proxy reply the gate must refuse, and what it says. */
+interface IEngineCase {
+  readonly name: string;
+  readonly stub: StubSettings;
+  readonly message: string;
+}
+
+/** A `gh --version` answer, and whether the gate may verify with that gh. */
+interface IGhCase {
+  readonly version: string;
+  readonly accepted: boolean;
 }
 
 /** A Trusted Publishing npm version, and whether the release guard must accept it. */
@@ -253,9 +308,12 @@ function writeCommand(dir: string, name: string, body: string): string {
 }
 
 /**
- * A `curl` that serves a go.mod embedding `$STUB_ENGINE` and records its URL,
- * and anything else as a file that is not the release asset; and a `tar` that
- * only records it ran. Nothing reaches the network.
+ * A `curl` that records each URL and serves `$STUB_GO_MOD` for a go.mod,
+ * `$STUB_INFO` for a module-proxy reply, and anything else as a file that is
+ * not the release asset; a `gh` that answers `--version` with
+ * `$STUB_GH_VERSION` and `--help` with `$STUB_GH_HELP`, and records a verify
+ * call's arguments before exiting `$STUB_GH_STATUS`; and a
+ * `tar` that only records it ran. Nothing reaches the network.
  *
  * @returns Directory holding the stubs, to prepend to `PATH`.
  */
@@ -267,16 +325,55 @@ function makeDownloadStubs(): string {
     '  case "$1" in --output) out="$2"; shift ;; https://*) url="$1" ;; esac',
     '  shift',
     'done',
+    'printf "%s\\n" "$url" >> "$STUB_URL_LOG"',
     'case "$url" in',
-    '  */go.mod)',
-    '    printf "\\tgithub.com/ossf/scorecard/v5 %s\\n" "$STUB_ENGINE" > "$out"',
-    '    printf "%s" "$url" > "$STUB_GO_MOD_LOG" ;;',
+    '  */go.mod) printf "%b" "$STUB_GO_MOD" > "$out" ;;',
+    '  *.info) printf "%s" "$STUB_INFO" > "$out" ;;',
     '  *) printf "not the release asset\\n" > "$out" ;;',
     'esac',
   ];
+  const gh = [
+    'if [ "$1" = "--version" ]; then printf "%s\\n" "$STUB_GH_VERSION"; exit 0; fi',
+    'if [ "$3" = "--help" ]; then printf "%s\\n" "$STUB_GH_HELP"; exit 0; fi',
+    'printf "%s\\n" "$@" > "$STUB_GH_LOG"',
+    'exit "$STUB_GH_STATUS"',
+  ];
   writeCommand(dir, 'curl', `${curl.join('\n')}\n`);
+  writeCommand(dir, 'gh', `${gh.join('\n')}\n`);
   writeCommand(dir, 'tar', 'touch "$STUB_TAR_MARKER"\n');
   return dir;
+}
+
+/**
+ * The Go module proxy's reply for a release cut from {@link SOURCE_DIGEST}.
+ *
+ * @param engine - Release version.
+ * @param origin - Origin fields to override.
+ * @returns The reply's JSON text.
+ */
+function proxyInfo(engine: string, origin: StubSettings = {}): string {
+  const tagged = { VCS: 'git', URL: ENGINE_REPO_URL, Hash: SOURCE_DIGEST };
+  const fields = { ...tagged, Ref: `refs/tags/${engine}`, ...origin };
+  return JSON.stringify({ Version: engine, Origin: fields });
+}
+
+/**
+ * Stub answers for a tagged release whose provenance does not verify, so a
+ * run stops before it unpacks anything.
+ *
+ * @param engine - Release version the stub action go.mod requires.
+ * @returns The settings.
+ */
+function stubSettings(engine: string): StubSettings {
+  const goMod = `require (\\n\\tgithub.com/ossf/scorecard/v5 ${engine}\\n)\\n`;
+  const info = proxyInfo(engine);
+  return {
+    STUB_GO_MOD: goMod,
+    STUB_INFO: info,
+    STUB_GH_VERSION: 'gh version 2.102.0 (2026-09-30)',
+    STUB_GH_HELP: '--source-digest',
+    STUB_GH_STATUS: '1',
+  };
 }
 
 /**
@@ -306,26 +403,42 @@ function actionRefsIn(path: string): readonly string[] {
 }
 
 /**
+ * The lines a stub recorded.
+ *
+ * @param path - Log file.
+ * @returns Its lines, or none when the stub never wrote it.
+ */
+function readLog(path: string): readonly string[] {
+  if (!existsSync(path)) return [];
+  const text = readFileSync(path, 'utf8');
+  return text.split('\n').filter(line => line !== '');
+}
+
+/**
  * Run the gate script against the download stubs.
  *
- * @param engine - Scorecard version the stub action go.mod embeds.
+ * @param engine - Scorecard version the stub action go.mod requires.
+ * @param overrides - Stub answers that replace the defaults.
  * @param script - Gate script to run.
- * @returns Exit status, output, and whether anything was extracted.
+ * @returns Exit status, output, what was fetched and verified, and whether
+ *   anything was extracted.
  */
-function runGate(engine: string, script = GATE_SCRIPT): IGateRun {
+function runGate(engine: string, overrides: StubSettings = {}, script = GATE_SCRIPT): IGateRun {
   const stubs = makeDownloadStubs();
-  const marker = join(stubs, 'tar-ran');
-  const goModLog = join(stubs, 'go-mod-url');
-  const env = stubEnvFor(stubs, {
-    STUB_ENGINE: engine,
-    STUB_TAR_MARKER: marker,
-    STUB_GO_MOD_LOG: goModLog,
-  });
+  const [marker, urlLog, ghLog] = ['tar-ran', 'urls', 'gh-args'].map(name => join(stubs, name));
+  const logs = { STUB_TAR_MARKER: marker, STUB_URL_LOG: urlLog, STUB_GH_LOG: ghLog };
+  const env = stubEnvFor(stubs, { ...stubSettings(engine), ...overrides, ...logs });
   try {
     const result = spawnSync('bash', [script], { env, encoding: 'utf8' });
     const output = `${result.stdout}${result.stderr}`;
-    const goModUrl = existsSync(goModLog) ? readFileSync(goModLog, 'utf8') : '';
-    return { status: result.status ?? -1, output, didExtract: existsSync(marker), goModUrl };
+    const urls = readLog(urlLog);
+    const goModUrl = urls.find(url => url.endsWith('/go.mod')) ?? '';
+    const [status, didExtract, verifyArgs] = [
+      result.status ?? -1,
+      existsSync(marker),
+      readLog(ghLog),
+    ];
+    return { status, output, didExtract, goModUrl, urls, verifyArgs };
   } finally {
     rmSync(stubs, { recursive: true, force: true });
   }
@@ -347,7 +460,7 @@ function writeFileWithDir(path: string, text: string): string {
 
 /**
  * Run a copy of the gate script in a scratch repo whose scorecard.yml holds
- * `lines`, with the stub go.mod embedding the pinned engine.
+ * `lines`, with the stub go.mod requiring {@link ENGINE}.
  *
  * @param lines - scorecard.yml step lines.
  * @returns What the gate reported.
@@ -361,7 +474,7 @@ function runGateWithWorkflow(lines: readonly string[]): IGateRun {
   const source = gateScript();
   writeFileWithDir(script, source);
   try {
-    return runGate(PINNED_ENGINE, script);
+    return runGate(ENGINE, {}, script);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -471,6 +584,90 @@ const PIN_CASES: readonly IPinCase[] = [
   },
 ];
 
+const UNTIED = 'does not require exactly one';
+const UNTAGGED = 'names no tagged ossf/scorecard commit';
+const REQUIRED = `require (\\n\\tgithub.com/ossf/scorecard/v5 ${ENGINE}\\n)\\n`;
+const FORK = `github.com/ossf/scorecard/v5 ${ENGINE} => github.com/fork/scorecard/v5 ${ENGINE}`;
+/** The engine module as a Go quoted string, which go.mod reads as the bare path. */
+const QUOTED_MODULE = '"github.com/ossf/scorecard/v5"';
+/** The same path with its last slash escaped (`\x2f`), which Go unquotes to the engine. */
+const ESCAPED_MODULE = '"github.com/ossf/scorecard\\\\x2fv5"';
+const FORKED = `=> github.com/fork/scorecard/v5 ${OTHER_ENGINE}`;
+/**
+ * A case whose action go.mod the gate cannot tie to one tagged release.
+ *
+ * @param name - What the go.mod does.
+ * @param goMod - The go.mod text, escaped for `printf "%b"`.
+ * @returns The case.
+ */
+function untied(name: string, goMod: string): IEngineCase {
+  return { name, stub: { STUB_GO_MOD: goMod }, message: UNTIED };
+}
+const ENGINE_CASES: readonly IEngineCase[] = [
+  untied('no engine module', 'require (\\n\\tgithub.com/other/mod v1.0.0\\n)\\n'),
+  untied('a mention only in a comment', `// github.com/ossf/scorecard/v5 ${ENGINE}\\n`),
+  untied('a replaced engine', `${REQUIRED}replace ${FORK}\\n`),
+  untied('a replace block and no require', `replace (\\n\\t${FORK}\\n)\\n`),
+  untied(
+    'an exclude beside the require',
+    `${REQUIRED}exclude github.com/ossf/scorecard/v5 v5.5.0\\n`,
+  ),
+  untied('a quoted replace', `${REQUIRED}replace ${QUOTED_MODULE} ${FORKED}\\n`),
+  untied(
+    'a quoted replace in a block',
+    `${REQUIRED}replace (\\n\\t${QUOTED_MODULE} ${FORKED}\\n)\\n`,
+  ),
+  untied('a quoted exclude', `${REQUIRED}exclude ${QUOTED_MODULE} v5.5.0\\n`),
+  untied(
+    'a quoted replace with an escaped slash',
+    `${REQUIRED}replace ${ESCAPED_MODULE} ${FORKED}\\n`,
+  ),
+  untied('a replace block opened with no space', `${REQUIRED}replace(\\n\\t${FORK}\\n)\\n`),
+  untied(
+    'an exclude block opened with no space',
+    `${REQUIRED}exclude(\\n\\tgithub.com/ossf/scorecard/v5 v5.5.0\\n)\\n`,
+  ),
+  untied('a replace split by a carriage return', `${REQUIRED}replace\\r${FORK}\\n`),
+  untied('a replace after an empty one-line block', `${REQUIRED}exclude ( )\\nreplace ${FORK}\\n`),
+  untied('a block opened by a quoted word', `${REQUIRED}"junk" (\\n)\\n`),
+  untied(
+    'a pseudo-version',
+    'require (\\n\\tgithub.com/ossf/scorecard/v5 v5.6.1-0.20261001000000-61e847433562\\n)\\n',
+  ),
+  {
+    name: 'an origin on a branch',
+    stub: { STUB_INFO: proxyInfo(ENGINE, { Ref: 'refs/heads/main' }) },
+    message: UNTAGGED,
+  },
+  {
+    name: 'an origin in a fork',
+    stub: { STUB_INFO: proxyInfo(ENGINE, { URL: 'https://github.com/fork/scorecard' }) },
+    message: UNTAGGED,
+  },
+  {
+    name: 'an origin hash that is no commit',
+    stub: { STUB_INFO: proxyInfo(ENGINE, { Hash: 'abc' }) },
+    message: UNTAGGED,
+  },
+  {
+    name: 'a reply for another version',
+    stub: { STUB_INFO: proxyInfo(OTHER_ENGINE) },
+    message: UNTAGGED,
+  },
+  { name: 'a reply that is not JSON', stub: { STUB_INFO: 'not json' }, message: UNTAGGED },
+];
+
+/** Text the gate prints when its `gh` is too old to enforce the policy exactly. */
+const GH_NEEDED = 'GitHub CLI 2.102.0 or newer';
+const GH_CASES: readonly IGhCase[] = [
+  { version: 'gh version 2.102.0 (2026-09-30)', accepted: true },
+  { version: 'gh version 10.0.0', accepted: true },
+  { version: 'gh version 2.101.0 (2026-09-15)', accepted: false },
+  { version: 'gh version 2.99.9', accepted: false },
+  { version: 'gh version 2.102.0-rc.1', accepted: false },
+  { version: 'gh version DEV', accepted: false },
+];
+
 describe('Scorecard npm-pin gate', () => {
   /**
    * The job also waits for `changes`; `Validate` needs every job it needs, so a
@@ -572,19 +769,77 @@ describe('Scorecard npm-pin gate', () => {
     });
   });
 
-  it('[SNP-7] refuses a release asset whose checksum differs, before unpacking it', () => {
-    const run = runGate(PINNED_ENGINE);
-    expect(run.output).toContain('checksum');
+  it('[SNP-7] refuses a release asset whose provenance does not verify, before unpacking it', () => {
+    const run = runGate(ENGINE);
+    expect(run.output).toContain(PROVENANCE_REJECTED);
     expect(run.didExtract).toBe(false);
     expect(run.status).not.toBe(0);
   });
 
-  it('[SNP-8] refuses to run when the scheduled scan embeds a different engine', () => {
-    const run = runGate('v5.6.0');
-    expect(run.output).toContain(`does not embed Scorecard ${PINNED_ENGINE}`);
-    expect(run.didExtract).toBe(false);
+  it('[SNP-7] unpacks the asset only once its provenance verifies', () => {
+    const run = runGate(ENGINE, { STUB_GH_STATUS: '0' });
+    expect(run.output).not.toContain(PROVENANCE_REJECTED);
+    expect(run.didExtract).toBe(true);
+  });
+
+  it('[SNP-7] verifies the asset as built by the SLSA generator from the tagged commit', () => {
+    const run = runGate(ENGINE);
+    const [subcommand, verb, asset, ...flags] = run.verifyArgs;
+    const policy = flags.map(arg => (arg.endsWith('.intoto.jsonl') ? BUNDLE_ARG : arg));
+    expect([subcommand, verb]).toEqual(['attestation', 'verify']);
+    expect(asset).toMatch(ASSET_PATH);
+    expect(policy).toEqual(PROVENANCE_POLICY);
+  });
+
+  it.each([ENGINE, OTHER_ENGINE])(
+    '[SNP-8] runs the engine the scheduled scan requires: %s',
+    engine => {
+      const run = runGate(engine);
+      const release = `${RELEASES_URL}/${engine}`;
+      const assets = run.urls.filter(url => url.startsWith(`${release}/`));
+      expect(run.urls).toContain(`${MODULE_PROXY_URL}/${engine}.info`);
+      expect(run.urls).toContain(`${release}/multiple.intoto.jsonl`);
+      expect(assets).toHaveLength(2);
+      expect(run.verifyArgs).toContain(`refs/tags/${engine}`);
+    },
+  );
+
+  it('[SNP-8] reads a one-line require, past comments that name another release', () => {
+    const goMod = `// was github.com/ossf/scorecard/v5 v5.5.0\\nrequire github.com/ossf/scorecard/v5 ${ENGINE} // indirect\\n`;
+    const run = runGate(ENGINE, { STUB_GO_MOD: goMod });
+    expect(run.urls).toContain(`${MODULE_PROXY_URL}/${ENGINE}.info`);
+    expect(run.verifyArgs).toContain(`refs/tags/${ENGINE}`);
+  });
+
+  it.each(ENGINE_CASES)(
+    '[SNP-13] refuses an engine it cannot tie to a tagged release: $name',
+    row => {
+      const run = runGate(ENGINE, row.stub);
+      const downloads = run.urls.filter(url => url.startsWith(RELEASES_URL));
+      expect(run.output).toContain(row.message);
+      expect(downloads).toEqual([]);
+      expect(run.verifyArgs).toEqual([]);
+      expect(run.status).not.toBe(0);
+    },
+  );
+
+  it('[SNP-14] says what it needs, before any download, when gh cannot pin a source commit', () => {
+    const run = runGate(ENGINE, { STUB_GH_HELP: 'Usage: gh attestation verify' });
+    expect(run.output).toContain("'gh attestation verify --source-digest'");
+    expect(run.urls).toEqual([]);
     expect(run.status).not.toBe(0);
   });
+
+  it.each(GH_CASES)(
+    '[SNP-14] verifies only with a gh that matches the tag exactly: $version',
+    row => {
+      const run = runGate(ENGINE, { STUB_GH_VERSION: row.version });
+      const didAskForNewerGh = run.output.includes(GH_NEEDED);
+      expect(run.urls.length > 0).toBe(row.accepted);
+      expect(run.verifyArgs.length > 0).toBe(row.accepted);
+      expect(didAskForNewerGh).toBe(!row.accepted);
+    },
+  );
 
   it('[SNP-9] proves the scan can fail, then checks the tree the scheduled scan reads', () => {
     const script = gateScript();
@@ -599,7 +854,7 @@ describe('Scorecard npm-pin gate', () => {
   it.each(PIN_CASES)('[SNP-10] takes the engine pin only from an active SHA: $name', row => {
     const run = runGateWithWorkflow(row.lines);
     const isPinRejected = run.output.includes(PIN_REJECTED);
-    const didReachDownload = run.output.includes('checksum');
+    const didReachDownload = run.output.includes(PROVENANCE_REJECTED);
     const fetched = row.accepted ? `${ACTION_GO_MOD_URL}/${ACTION_SHA}/go.mod` : '';
     expect(isPinRejected).toBe(!row.accepted);
     expect(didReachDownload).toBe(row.accepted);
@@ -609,7 +864,7 @@ describe('Scorecard npm-pin gate', () => {
 
   it('[SNP-11] checks the engine of the action step the scheduled scan actually runs', () => {
     const refs = actionRefsIn(ACTION_WORKFLOW);
-    const run = runGate(PINNED_ENGINE);
+    const run = runGate(ENGINE);
     expect(refs).toHaveLength(1);
     expect(refs[0]).toMatch(FULL_SHA);
     expect(run.goModUrl).toBe(`${ACTION_GO_MOD_URL}/${refs[0]}/go.mod`);
