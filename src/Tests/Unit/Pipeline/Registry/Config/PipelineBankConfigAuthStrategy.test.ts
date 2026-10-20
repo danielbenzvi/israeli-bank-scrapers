@@ -4,7 +4,8 @@
  * <p>Test Case IDs:
  *   - T-REG-1 (FIRING): every entry's `authStrategyKind` is one of the 3 union members.
  *     RED while the field is absent (pre-C1); GREEN after C1 adds it to every bank.
- *   - T-REG-2: family counts are exactly 5 token / 9 session-cookie / 3 api-direct.
+ *   - T-REG-2: family counts are exactly 5 token / 10 session-cookie / 3 api-direct
+ *     (upstream: 9 session-cookie; the household fork adds Cibus).
  *   - T-REG-3: the api-direct banks are exactly OneZero, PayBox, Pepper.
  *   - T-REG-4: each specific bank maps to the spec-S2 value (table-driven).
  *
@@ -71,7 +72,7 @@ describe('PipelineBankConfig — authStrategyKind completeness (T-REG)', () => {
     }
   });
 
-  it('T-REG-2: family counts are 5 token / 9 session-cookie / 3 api-direct', async () => {
+  it('T-REG-2: family counts are 5 token / 10 session-cookie / 3 api-direct', async () => {
     const { PIPELINE_BANK_CONFIG: bankConfigMap } =
       await import('../../../../../Scrapers/Pipeline/Registry/Config/PipelineBankConfig.js');
     const entries = Object.values(bankConfigMap);
@@ -81,7 +82,8 @@ describe('PipelineBankConfig — authStrategyKind completeness (T-REG)', () => {
       if (config.authStrategyKind === 'session-cookie') counts.sessionCookie++;
       if (config.authStrategyKind === 'api-direct') counts.apiDirect++;
     }
-    expect(counts).toEqual({ token: 5, sessionCookie: 9, apiDirect: 3 });
+    // Household fork: Cibus is the tenth session-cookie bank (upstream: 9).
+    expect(counts).toEqual({ token: 5, sessionCookie: 10, apiDirect: 3 });
   });
 
   it('T-REG-3: api-direct banks are exactly OneZero, PayBox, and Pepper', async () => {

@@ -63,7 +63,7 @@ describe('createLoginStep', () => {
 });
 
 describe('PipelineRegistry', () => {
-  it('contains 17 pipeline banks', () => {
+  it('contains 18 pipeline banks', () => {
     const keys = Object.keys(PIPELINE_REGISTRY);
     expect(keys).toContain('amex');
     expect(keys).toContain('beinleumi');
@@ -83,6 +83,10 @@ describe('PipelineRegistry', () => {
     expect(keys).toContain('pepper');
     expect(keys).toContain('visaCal');
     expect(keys).toContain('yahav');
-    expect(keys).toHaveLength(17);
+    // Household fork: upstream's count plus Cibus (household-only, not published
+    // upstream — family-office R-029 §7). Upstream and the household each once
+    // raised this from 16 to 17 for different banks, and git merged the two
+    // identical edits silently; state the sum here so the next rebase sees it.
+    expect(keys).toHaveLength(18);
   });
 });

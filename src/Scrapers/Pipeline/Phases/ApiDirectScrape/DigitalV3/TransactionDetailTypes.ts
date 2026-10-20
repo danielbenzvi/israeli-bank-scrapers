@@ -6,6 +6,7 @@
  * through modules that otherwise depend in one direction only.
  */
 
+import type { ApiRecord } from '../../../Mediator/Scrape/AutoMapperFacade/AutoMapperTypes.js';
 import type { IPostWithMetadata } from '../../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../../Types/Procedure.js';
 import type { IDetailBudgetLimits } from './TransactionDetailBudget.js';
@@ -58,5 +59,11 @@ export interface ICardDetailDeps {
   readonly jitter: () => number;
 }
 
-/** A raw Amex row, plus the outcome once a detail attempt has been made. */
-export type AmexRow = Record<string, unknown>;
+/**
+ * A raw Amex row, plus the outcome once a detail attempt has been made.
+ *
+ * An alias of the mapper's own record type rather than a second open-record
+ * declaration, so it does not add to the duplicate-alias population that
+ * `JsonValueSingleSource.test.ts` ratchets.
+ */
+export type AmexRow = ApiRecord;

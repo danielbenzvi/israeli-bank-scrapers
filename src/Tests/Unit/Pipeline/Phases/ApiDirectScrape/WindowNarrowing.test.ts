@@ -64,7 +64,11 @@ afterEach(() => {
 
 describe('window-narrowing contract', () => {
   it('covers every bank in the API-direct scrape phase', () => {
-    expect(WINDOW_NARROWING_CASES).toHaveLength(17);
+    // Household fork: upstream's count plus Cibus (household-only, not published
+    // upstream — family-office R-029 §7). Upstream and the household each once
+    // raised this from 16 to 17 for different banks, and git merged the two
+    // identical edits silently; state the sum here so the next rebase sees it.
+    expect(WINDOW_NARROWING_CASES).toHaveLength(18);
   });
 
   it('declares a known stance for every bank', () => {
@@ -74,7 +78,8 @@ describe('window-narrowing contract', () => {
   });
 
   it('splits the banks between narrowable and fixed', () => {
-    expect(NARROWABLE).toHaveLength(9);
+    // Cibus narrows by window end, so it lands on this side (upstream: 9).
+    expect(NARROWABLE).toHaveLength(10);
     expect(FIXED).toHaveLength(8);
   });
 });
