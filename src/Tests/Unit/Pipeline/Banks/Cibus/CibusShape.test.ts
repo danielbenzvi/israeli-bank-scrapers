@@ -185,6 +185,31 @@ describe('Cibus scrape shape', () => {
     expect(toDate).toMatch(/^\d{2}\/\d{2}\/\d{4}$/);
   });
 
+  // Exact values, worked out by hand from the input labels — not from the code.
+  // The format test above would pass if every date moved by a day.
+  it.each([
+    ['a month-start chunk stamp', '2026-03-01T00:00:00.000Z', '01/03/2026'],
+    // The case a bank-calendar read would break: 23:59:59Z is already the next
+    // day in Jerusalem, but the label means the 31st and must stay the 31st.
+    ['a month-end chunk stamp', '2026-03-31T23:59:59.000Z', '31/03/2026'],
+    ['a leap day', '2024-02-29T00:00:00.000Z', '29/02/2024'],
+    // The window-end fallback hands over a toISOString(). It reports the UTC
+    // day, as the getUTC* reads it replaced did — unverified whether that is
+    // the right day near midnight; preserved, not blessed.
+    [
+      'a window-end instant after midnight in the bank zone',
+      '2026-10-20T22:30:00.000Z',
+      '20/10/2026',
+    ],
+  ])('renders %s as the provider expects', (_label, iso, expected) => {
+    const rendered = toProviderDate(iso);
+    expect(rendered).toBe(expected);
+  });
+
+  it('refuses a value that is not an ISO day label', () => {
+    expect(() => toProviderDate('20/10/2026')).toThrow();
+  });
+
   it('names the budget verb on the balance step', () => {
     const ctx = ctxUnbounded();
     const vars = CIBUS_SHAPE.balance.buildVars(CIBUS_ACCOUNT, ctx);
