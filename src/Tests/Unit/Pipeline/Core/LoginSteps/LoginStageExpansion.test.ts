@@ -40,10 +40,7 @@ describe('staged login — expansion', () => {
   });
 
   it('emits one pass per stage, in order', () => {
-    const config = configWith([
-      { credentialKeys: ['username'] },
-      { credentialKeys: ['password'] },
-    ]);
+    const config = configWith([{ credentialKeys: ['username'] }, { credentialKeys: ['password'] }]);
     const passes = expandLoginStages(config);
     const keys = passes.map((p): string[] => p.fields.map((f): string => f.credentialKey));
     expect(keys).toEqual([['username'], ['password']]);
@@ -52,10 +49,7 @@ describe('staged login — expansion', () => {
   it('narrows each pass to the fields its own page carries', () => {
     // The point of the whole contract: `password` is never looked for on the
     // page that only has the identifier, because it does not exist there yet.
-    const config = configWith([
-      { credentialKeys: ['username'] },
-      { credentialKeys: ['password'] },
-    ]);
+    const config = configWith([{ credentialKeys: ['username'] }, { credentialKeys: ['password'] }]);
     const passes = expandLoginStages(config);
     const first = passes[0]?.fields.map((f): string => f.credentialKey) ?? [];
     expect(first).not.toContain('password');
@@ -77,10 +71,7 @@ describe('staged login — expansion', () => {
   it('produces passes that cannot be expanded again', () => {
     // A pass IS an ordinary login. Leaving `stages` on it would make that
     // false, and would let a second expansion multiply the passes.
-    const config = configWith([
-      { credentialKeys: ['username'] },
-      { credentialKeys: ['password'] },
-    ]);
+    const config = configWith([{ credentialKeys: ['username'] }, { credentialKeys: ['password'] }]);
     const passes = expandLoginStages(config);
     const reexpanded = expandLoginStages(passes[0]);
     expect(passes[0]?.stages).toBeUndefined();
@@ -88,10 +79,7 @@ describe('staged login — expansion', () => {
   });
 
   it('carries every other setting through untouched', () => {
-    const config = configWith([
-      { credentialKeys: ['username'] },
-      { credentialKeys: ['password'] },
-    ]);
+    const config = configWith([{ credentialKeys: ['username'] }, { credentialKeys: ['password'] }]);
     const passes = expandLoginStages(config);
     expect(passes[0]?.loginUrl).toBe(config.loginUrl);
     expect(passes[1]?.possibleResults).toBe(config.possibleResults);

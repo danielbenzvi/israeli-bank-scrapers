@@ -11,13 +11,13 @@ import type { ITransaction } from '../../../../Transactions.js';
 import type { IWindowCoverage } from '../../../../WindowCoverage.js';
 import { reportMapRejects } from '../../Mediator/Scrape/CoverageAudit/MapRejects.js';
 import { classifyWindowCoverage } from '../../Mediator/Scrape/CoverageAudit/WindowCoverageVerdict.js';
-import { type IMapTxnsOpts, mapOne } from './ApiDirectScrapeMapRow.js';
 import { applyStartWindow } from '../../Mediator/Scrape/StartWindow.js';
 import { collapseDuplicates } from '../../Mediator/Scrape/TxnDedup.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { isOk, succeed } from '../../Types/Procedure.js';
 import { collectAccountRows } from './ApiDirectScrapeBackfill.js';
 import type { IAcctCtx } from './ApiDirectScrapeDispatchArgs.js';
+import { type IMapTxnsOpts, mapOne } from './ApiDirectScrapeMapRow.js';
 
 /**
  * Map raw rows through the shape-aware mapper (drops rejects).

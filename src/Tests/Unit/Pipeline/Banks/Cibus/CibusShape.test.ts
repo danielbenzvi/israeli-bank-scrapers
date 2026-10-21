@@ -270,7 +270,10 @@ describe('Cibus scrape shape', () => {
     // `toTransaction` is not on this path at all — the shared auto-mapper builds
     // the transaction — so asserting against it would prove nothing about a run.
     const row = deal();
-    const extra = CIBUS_SHAPE.providerExtraOf?.(row) as { companyPrice?: number; otlPrice?: number };
+    const extra = CIBUS_SHAPE.providerExtraOf?.(row) as {
+      companyPrice?: number;
+      otlPrice?: number;
+    };
     expect(extra.companyPrice).toBe(40);
     expect(extra.otlPrice).toBe(22.5);
   });

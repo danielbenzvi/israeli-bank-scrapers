@@ -179,9 +179,7 @@ describe('AmexShape transactions', () => {
     const body = {
       data: {
         israelAbroadVouchers: {
-          outOfStatementChargeDateVouchers: [
-            { immediateVouchersCurrencyDate: [{ id: 'o1' }] },
-          ],
+          outOfStatementChargeDateVouchers: [{ immediateVouchersCurrencyDate: [{ id: 'o1' }] }],
         },
       },
     };

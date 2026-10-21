@@ -89,5 +89,4 @@ async function detectOtpError(mediator: IElementMediator): Promise<IRaceResult> 
     .catch((): IRaceResult => NOT_FOUND);
 }
 
-export {
-detectOtpError, detectOtpForm,   detectOtpSplitField, detectOtpSubmit, detectOtpTrigger };
+export { detectOtpError, detectOtpForm, detectOtpSplitField, detectOtpSubmit, detectOtpTrigger };

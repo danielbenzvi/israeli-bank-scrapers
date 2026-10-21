@@ -5,7 +5,7 @@ import {
   TransactionTypes,
 } from '../../Transactions.js';
 import ScraperErrorTypes from '../Base/ErrorTypes.js';
-import { type IScraperScrapingResult, type ScraperOptions } from '../Base/Interface.js';
+import { type IScraperScrapingResult } from '../Base/Interface.js';
 import ScraperError from '../Base/ScraperError.js';
 import {
   BLOCKED_STATUSES,
@@ -347,17 +347,18 @@ export function splitCookie(token: string): { ok: boolean; name: string; value: 
  * that match from ever succeeding. The split rides `providerExtra` and is typed
  * again at the consumer's boundary.
  * @param deal - A raw purchase row.
- * @param options - Scraper options, for raw-transaction inclusion.
+ * No `rawTransaction`: `includeRawTransaction` is a Legacy-only option upstream
+ * deprecated (#542), and the household's consumer never sets it, so the raw row
+ * was never attached on a real run.
  * @returns A standard transaction.
  */
-export function toTransaction(deal: ICibusDeal, options: ScraperOptions): ITransaction {
+export function toTransaction(deal: ICibusDeal): ITransaction {
   const amount = -deal.price;
-  const raw = options.includeRawTransaction ? deal : undefined;
   const money = { originalAmount: amount, chargedAmount: amount, ...ILS };
   const dates = toDates(deal.date);
   const core = { type: TransactionTypes.Normal, identifier: deal.deal_id, ...dates };
   const body = { description: deal.rest_name ?? '', status: TransactionStatuses.Completed };
-  const extras = { providerExtra: toDealExtra(deal), rawTransaction: raw };
+  const extras = { providerExtra: toDealExtra(deal) };
   return { ...core, ...money, ...body, ...extras };
 }
 
@@ -378,18 +379,13 @@ function toDealExtra(deal: ICibusDeal): Readonly<Record<string, unknown>> {
  * identifier is sensitive.
  * @param deals - The countable purchase rows, already partitioned by activity.
  * @param budget - The budget block from the last response that carried one.
- * @param options - Scraper options, threaded to the row mapper.
  * @returns One account with its transactions.
  */
-export function toAccount(
-  deals: ICibusDeal[],
-  budget: ICibusBudget,
-  options: ScraperOptions,
-): ITransactionsAccount {
+export function toAccount(deals: ICibusDeal[], budget: ICibusBudget): ITransactionsAccount {
   // Already partitioned by the caller, which is what lets it report how many
   // rows it had to drop. Filtering here as well would hide that count behind a
   // second, silent pass.
-  const txns = deals.map(deal => toTransaction(deal, options));
+  const txns = deals.map(deal => toTransaction(deal));
   const balance = toAccountBalance(budget);
   return { accountNumber: 'cibus', ...balance, providerExtra: toAccountExtra(budget), txns };
 }

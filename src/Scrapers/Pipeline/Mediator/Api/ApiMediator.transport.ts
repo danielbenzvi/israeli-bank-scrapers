@@ -7,15 +7,8 @@ import { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';
 import type { IPostWithMetadata, PostData } from '../../Strategy/Fetch/FetchStrategy.js';
 import type { Procedure } from '../../Types/Procedure.js';
 import { fail, isOk, succeed } from '../../Types/Procedure.js';
-import type {
-  IFireGetArgs,
-  IFirePostArgs,
-  IFireQueryArgs,
-} from './ApiMediator.transport.types.js';
-import type {
-  IGraphQLEnvelope,
-  IGraphQLError,
-} from './ApiMediator.types.js';
+import type { IFireGetArgs, IFirePostArgs, IFireQueryArgs } from './ApiMediator.transport.types.js';
+import type { IGraphQLEnvelope, IGraphQLError } from './ApiMediator.types.js';
 
 /** Empty header map — shared singleton for callers with no extras. */
 const NO_EXTRA_HEADERS: Record<string, string> = Object.freeze({});

@@ -18,15 +18,8 @@ import {
   fireQuery,
   NO_EXTRA_HEADERS,
 } from './ApiMediator.transport.js';
-import type {
-  IFirePostArgs,
-  IFireQueryArgs,
-} from './ApiMediator.transport.types.js';
-import type {
-  IApiCallContext,
-  IApiPostOpArgs,
-  IApiQueryOpArgs,
-} from './ApiMediator.types.js';
+import type { IFirePostArgs, IFireQueryArgs } from './ApiMediator.transport.types.js';
+import type { IApiCallContext, IApiPostOpArgs, IApiQueryOpArgs } from './ApiMediator.types.js';
 
 /**
  * Build the optional extras subset of firePost args.

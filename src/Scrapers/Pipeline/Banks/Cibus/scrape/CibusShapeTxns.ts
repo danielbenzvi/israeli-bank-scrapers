@@ -15,6 +15,7 @@
  * scores request behaviour. Chunk-at-a-time is sequential by construction.
  */
 
+import ScraperError from '../../../../Base/ScraperError.js';
 import {
   generateMonthChunks,
   type IMonthChunk,
@@ -37,6 +38,9 @@ import {
   VERB_DEALS,
 } from './CibusShapeHelpers.js';
 
+/** The leading calendar-day label of an ISO-8601 string. */
+const ISO_DAY_PREFIX = /^(\d{4})-(\d{2})-(\d{2})T/;
+
 /** The provider's own date format, which its filters expect. */
 const PROVIDER_DATE_FORMAT = 'DD/MM/YYYY';
 
@@ -46,13 +50,15 @@ const PROVIDER_DATE_FORMAT = 'DD/MM/YYYY';
  * @returns The same day in the provider's format.
  */
 function toProviderDate(iso: string): string {
-  const date = new Date(iso);
-  const dayOfMonth = date.getUTCDate();
-  const monthIndex = date.getUTCMonth() + 1;
-  const day = String(dayOfMonth).padStart(2, '0');
-  const month = String(monthIndex).padStart(2, '0');
-  const fullYear = date.getUTCFullYear();
-  const year = String(fullYear);
+  // Reads the day label directly rather than through a Date. Every input is
+  // either a month chunk, stamped `<BankDay>T00:00:00.000Z` / `T23:59:59.000Z`
+  // by generateMonthChunks, or the window end's own toISOString() — so the
+  // leading YYYY-MM-DD is exactly what the previous getUTC* reads returned.
+  // Byte-identical output; unverified whether the UTC day is the right day for
+  // the window-end fallback — preserved from the original.
+  const label = ISO_DAY_PREFIX.exec(iso);
+  if (label === null) throw new ScraperError(`Cibus: not an ISO date label: ${iso}`);
+  const [, year, month, day] = label;
   return `${day}/${month}/${year}`;
 }
 

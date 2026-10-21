@@ -56,7 +56,9 @@ describe('nextDetailRequest', () => {
 
   it('allows a request that fits with nothing to spare', () => {
     // 53s + 2s + 5s = 60s, exactly the ceiling.
-    expect(nextDetailRequest(LIMITS, { callsMade: 1, elapsedMs: 53_000, jitter: 0 }).proceed).toBe(true);
+    expect(nextDetailRequest(LIMITS, { callsMade: 1, elapsedMs: 53_000, jitter: 0 }).proceed).toBe(
+      true,
+    );
   });
 
   it('handles a zero-width delay range without going out of bounds', () => {

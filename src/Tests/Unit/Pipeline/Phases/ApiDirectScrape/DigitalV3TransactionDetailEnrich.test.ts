@@ -233,7 +233,9 @@ describe('enrichCardDetail — never subtracts from a scrape', () => {
     expect(out).toHaveLength(3);
     // Recorded rather than skipped silently, so "never asked" stays
     // distinguishable from "asked and learned nothing".
-    const hasOutcomeEverywhere = out.every((r: Record<string, unknown>): boolean => r.__detailOutcome !== undefined);
+    const hasOutcomeEverywhere = out.every(
+      (r: Record<string, unknown>): boolean => r.__detailOutcome !== undefined,
+    );
     expect(hasOutcomeEverywhere).toBe(true);
   });
 
@@ -256,7 +258,9 @@ describe('enrichCardDetail — never subtracts from a scrape', () => {
     const input = rows(3);
     const out = await enrichCardDetail(input, deps);
     const vouchers = out.map((r: Record<string, unknown>): unknown => r.seqVoucherNumber);
-    const didKeepMerchant = out.every((r: Record<string, unknown>): boolean => r.merchantName === 'M');
+    const didKeepMerchant = out.every(
+      (r: Record<string, unknown>): boolean => r.merchantName === 'M',
+    );
     expect(vouchers).toEqual(['1000', '1001', '1002']);
     expect(didKeepMerchant).toBe(true);
   });
@@ -266,10 +270,7 @@ describe('enrichCardDetail — spending and stopping', () => {
   it('stops issuing requests once the row limit is reached, keeping later rows', async () => {
     const log = { calls: 0 };
     const answer = okResponse(CATEGORY_C);
-    const deps = await withResolvableCard(
-      { post: countingPost(log, answer) },
-      { maxRows: 2 },
-    );
+    const deps = await withResolvableCard({ post: countingPost(log, answer) }, { maxRows: 2 });
     const input = rows(5);
     const out = await enrichCardDetail(input, deps);
     expect(log.calls).toBe(2);
@@ -387,7 +388,10 @@ describe('enrichCardDetail — voucher identification across both banks', () => 
     const log = { calls: 0 };
     const answer = okResponse({});
     const deps = await withResolvableCard({ post: countingPost(log, answer) });
-    const out = await enrichCardDetail([{ voucherNumberRatz: '000000000', merchantName: 'M' }], deps);
+    const out = await enrichCardDetail(
+      [{ voucherNumberRatz: '000000000', merchantName: 'M' }],
+      deps,
+    );
     expect(log.calls).toBe(0);
     expect(out).toHaveLength(1);
   });

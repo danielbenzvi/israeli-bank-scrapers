@@ -6,7 +6,6 @@
  * and the submit; this owns only the writing.
  */
 
-
 import type { IActionContext } from '../../Types/PipelineContext.js';
 import type { IActionMediator } from '../Elements/ElementMediator.js';
 import { readDiagTarget } from '../Otp/OtpShared.js';
@@ -43,6 +42,4 @@ export async function writeCodeIntoForm(args: IWriteCodeArgs): Promise<boolean> 
   return true;
 }
 
-
-
-export {ScraperErrorTypes} from '../../../Base/ErrorTypes.js';
+export { ScraperErrorTypes } from '../../../Base/ErrorTypes.js';

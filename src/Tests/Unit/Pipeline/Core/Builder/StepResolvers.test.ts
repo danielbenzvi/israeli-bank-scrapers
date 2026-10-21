@@ -109,7 +109,6 @@ function makeAdsShape(): IApiDirectScrapeShape<ISynAcct, string> {
   };
 }
 
-
 /**
  * The single phase a slot produced, for the slots that produce exactly one.
  * @param built - What the factory returned.
@@ -166,7 +165,7 @@ describe('buildLoginPhase', () => {
     for (const mode of modes) {
       const makeStateResult2 = makeState({ loginMode: mode });
       const builtPhase = buildLoginPhase(makeStateResult2);
-    const phase = onlyPhase(builtPhase);
+      const phase = onlyPhase(builtPhase);
       expect(phase.name).toBe('login');
     }
   });

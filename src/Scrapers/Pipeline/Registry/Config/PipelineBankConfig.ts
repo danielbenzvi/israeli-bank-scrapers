@@ -18,9 +18,7 @@ import {
   SESSION_COOKIE,
   TOKEN,
 } from './PipelineBankConfigShared.js';
-import type {
-  IPipelineBankConfig,
-} from './PipelineBankConfigTypes.js';
+import type { IPipelineBankConfig } from './PipelineBankConfigTypes.js';
 
 export type {
   AuthPathKey,
@@ -35,7 +33,11 @@ const LOGIN_AUTH_CONFIRM_ANGULAR_MS = 45_000;
 
 /** FIBI appsng SPA shell route — AUTH-DISCOVERY navigates here post-login. */
 /** The provider's ~30-day device token, and where it must be set to be sent. */
-const DEVICE_COOKIE = { namePrefix: 'device_', domainMatch: 'pluxee', cookieDomain: '.pluxee.co.il' };
+const DEVICE_COOKIE = {
+  namePrefix: 'device_',
+  domainMatch: 'pluxee',
+  cookieDomain: '.pluxee.co.il',
+};
 
 const FIBI_APPSNG_SHELL = '/appsng/Resources/PortalNG/shell/#/accountSummary';
 

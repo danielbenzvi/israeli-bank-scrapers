@@ -182,10 +182,14 @@ function outOfStatementRows(data: ITxnsData): readonly AmexTxn[] {
 export function mergeAmexRows(body: object): readonly AmexRowWithProvenance[] {
   const data = (body as ITxnsResp).data;
   if (!data) return [];
-  const approved = approvedRows(data).map((r): AmexRowWithProvenance => withProvenance(r, 'approval'));
-  const vouchers = voucherRows(data).map((r): AmexRowWithProvenance => withProvenance(r, 'voucher'));
-  const outOfStatement = outOfStatementRows(data).map(
-    (r): AmexRowWithProvenance => withProvenance(r, 'outOfStatement'),
+  const approved = approvedRows(data).map((r): AmexRowWithProvenance =>
+    withProvenance(r, 'approval'),
+  );
+  const vouchers = voucherRows(data).map((r): AmexRowWithProvenance =>
+    withProvenance(r, 'voucher'),
+  );
+  const outOfStatement = outOfStatementRows(data).map((r): AmexRowWithProvenance =>
+    withProvenance(r, 'outOfStatement'),
   );
   return [...approved, ...vouchers, ...outOfStatement];
 }

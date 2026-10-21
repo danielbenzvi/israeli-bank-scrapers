@@ -67,7 +67,8 @@ const CAPTURE_FIELDS = [
 ] as const;
 
 /** How a detail attempt ended. */
-export type DetailState = 'succeeded' | 'terminal-failure' | 'retryable-failure' | 'schema-mismatch';
+export type DetailState =
+  'succeeded' | 'terminal-failure' | 'retryable-failure' | 'schema-mismatch';
 
 /** Why it ended that way. */
 export type DetailOutcomeCode =

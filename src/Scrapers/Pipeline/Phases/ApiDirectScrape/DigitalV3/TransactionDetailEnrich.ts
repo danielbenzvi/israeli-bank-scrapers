@@ -138,7 +138,11 @@ function buildBody(ctx: IPassContext, target: IRowTarget): Record<string, unknow
  * @param reason - Which limit was reached.
  * @returns The state with the row appended, stopped if the clock ran out.
  */
-function outOfBudget(state: IPassState, row: AmexRow, reason: 'row-limit' | 'wall-clock'): IPassState {
+function outOfBudget(
+  state: IPassState,
+  row: AmexRow,
+  reason: 'row-limit' | 'wall-clock',
+): IPassState {
   const isStopped = state.isStopped || reason === 'wall-clock';
   return { ...emit(state, row), isStopped };
 }

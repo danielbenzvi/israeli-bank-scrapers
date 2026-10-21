@@ -166,7 +166,7 @@ class CibusScraper extends BaseScraperWithBrowser<ICibusCredentials> {
     const budget = await this.fetchBudget();
     const partition = partitionByActivity(deals);
     this.reportPartition(deals.length, partition);
-    const account = toAccount(partition.countable, budget, this.options);
+    const account = toAccount(partition.countable, budget);
     return { success: true, accounts: [account] };
   }
 

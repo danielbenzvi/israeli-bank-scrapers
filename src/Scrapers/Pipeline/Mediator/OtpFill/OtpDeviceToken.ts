@@ -110,7 +110,6 @@ async function invokeCallback(args: IInvokeArgs): Promise<boolean> {
   }
 }
 
-
 /**
  * Log a callback throw without raising it.
  *

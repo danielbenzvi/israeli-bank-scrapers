@@ -96,4 +96,3 @@ class InitPhase extends BasePhase {
 }
 
 export default InitPhase;
-

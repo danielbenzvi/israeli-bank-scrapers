@@ -8,9 +8,9 @@
  * `enrichCardDetail`; this file never decides whether to ask, only how.
  */
 
-import type { Brand } from '../../../Types/Brand.js';
 import { createHmac } from 'node:crypto';
 
+import type { Brand } from '../../../Types/Brand.js';
 import { isOk } from '../../../Types/Procedure.js';
 import { retryFits } from './TransactionDetailBudget.js';
 import {

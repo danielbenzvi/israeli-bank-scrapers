@@ -221,7 +221,6 @@ async function clickSubmitIfPresent(args: IFillAndSubmitArgs): Promise<true> {
   return true;
 }
 
-
 /** Promise alias keeping fill/executeAction sigs single-line. */
 type FillActionResult = Promise<Procedure<IActionContext>>;
 
@@ -238,7 +237,6 @@ async function fillAndSubmitOtpForm(args: IFillAndSubmitArgs): FillActionResult 
   await settleAfterOtpSubmit(executor, input.logger);
   return succeed(input);
 }
-
 
 /**
  * ACTION (sealed): Call retriever → fill code → click submit.

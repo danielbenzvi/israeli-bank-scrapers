@@ -32,8 +32,8 @@ import type { WKUrlOrLiteral } from '../../Registry/WK/UrlsWK.js';
 import type { IPage } from '../../Strategy/Fetch/Pagination.js';
 import type { IActionContext } from '../../Types/PipelineContext.js';
 import type { Procedure } from '../../Types/Procedure.js';
-import type { IShapeAmounts } from './ApiDirectScrapeMapRow.js';
 import type { IWindowRequestPolicy } from '../../Types/WindowNarrowing.js';
+import type { IShapeAmounts } from './ApiDirectScrapeMapRow.js';
 
 /** Opaque headers map (shape step may declare per-call extraHeaders). */
 export type HeaderMap = Record<string, string>;

@@ -48,10 +48,7 @@ const CIBUS_LOGIN: ILoginConfig = {
   // also required, and renders the rest of the form from that answer. Measured
   // on the live page — a capture after the identify step carries two inputs and
   // no password field, and a reveal click changes the document by six bytes.
-  stages: [
-    { credentialKeys: ['username'] },
-    { credentialKeys: ['password'] },
-  ],
+  stages: [{ credentialKeys: ['username'] }, { credentialKeys: ['password'] }],
 };
 
 /**
@@ -60,29 +57,31 @@ const CIBUS_LOGIN: ILoginConfig = {
  * @returns Pipeline descriptor (browser + declarative login + OTP + api-direct scrape).
  */
 function buildCibusPipeline(options: ScraperOptions): Procedure<IPipelineDescriptor> {
-  return createPipelineBuilder()
-    .withOptions(options)
-    .withBrowser()
-    .withDeclarativeLogin(CIBUS_LOGIN)
-    // NO otp-trigger: this provider has no "send me a code" control. The code
-    // is sent by the password step itself, whose response IS the challenge
-    // (status 210). The phase therefore had nothing to detect — tolerated on a
-    // cold run, and a hard failure on a WARM one, where the device token
-    // suppresses the challenge and there is no OTP screen at all.
-    // required=false: on a WARM run the device token suppresses the challenge
-    // for ~30 days, so there is no code input on the page and its absence is
-    // the expected state rather than a failure — the same reason Hapoalim
-    // declares it.
-    //
-    // A COLD run is not yet handled here. The provider raises the challenge as
-    // a split six-box code field, which `WK_OTP_INPUT` does not resolve and
-    // `fillInput` could not fill in one call even if it did, so the phase
-    // soft-skips and the session is never established. That is caught by
-    // `assertNotRefused` on the first data call rather than passing for an
-    // empty month — loud, but still short of filling the code.
-    .withOtpFill(false)
-    .withBrowserApiDirect(CIBUS_SHAPE)
-    .build();
+  return (
+    createPipelineBuilder()
+      .withOptions(options)
+      .withBrowser()
+      .withDeclarativeLogin(CIBUS_LOGIN)
+      // NO otp-trigger: this provider has no "send me a code" control. The code
+      // is sent by the password step itself, whose response IS the challenge
+      // (status 210). The phase therefore had nothing to detect — tolerated on a
+      // cold run, and a hard failure on a WARM one, where the device token
+      // suppresses the challenge and there is no OTP screen at all.
+      // required=false: on a WARM run the device token suppresses the challenge
+      // for ~30 days, so there is no code input on the page and its absence is
+      // the expected state rather than a failure — the same reason Hapoalim
+      // declares it.
+      //
+      // A COLD run is not yet handled here. The provider raises the challenge as
+      // a split six-box code field, which `WK_OTP_INPUT` does not resolve and
+      // `fillInput` could not fill in one call even if it did, so the phase
+      // soft-skips and the session is never established. That is caught by
+      // `assertNotRefused` on the first data call rather than passing for an
+      // empty month — loud, but still short of filling the code.
+      .withOtpFill(false)
+      .withBrowserApiDirect(CIBUS_SHAPE)
+      .build()
+  );
 }
 
 export default buildCibusPipeline;

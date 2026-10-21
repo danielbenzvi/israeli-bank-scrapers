@@ -14,9 +14,7 @@ import {
   DIGITALV3_DETAIL_SCHEMA_VERSION,
   interpretDetailEnvelope,
 } from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailInterpret.js';
-import {
-  classifyDetailTransport,
-} from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailTransport.js';
+import { classifyDetailTransport } from '../../../../../Scrapers/Pipeline/Phases/ApiDirectScrape/DigitalV3/TransactionDetailTransport.js';
 
 /**
  * A well-formed success envelope wrapping the given detail fields.
@@ -29,7 +27,15 @@ function successEnvelope(data: Record<string, unknown>): Record<string, unknown>
 
 describe('interpretDetailEnvelope', () => {
   it('rejects a body that is not a success envelope', () => {
-    for (const bad of [null, undefined, 'text', 42, {}, { isSuccess: false, data: {} }, { isSuccess: true }]) {
+    for (const bad of [
+      null,
+      undefined,
+      'text',
+      42,
+      {},
+      { isSuccess: false, data: {} },
+      { isSuccess: true },
+    ]) {
       const outcome = interpretDetailEnvelope(bad);
       expect(outcome.state).toBe('schema-mismatch');
       expect(outcome.outcomeCode).toBe('shape-mismatch');
@@ -37,7 +43,10 @@ describe('interpretDetailEnvelope', () => {
   });
 
   it('extracts the issuer category for an ordinary merchant', () => {
-    const body = successEnvelope({ businessName: 'MERCHANT', branchDescription: ' CATEGORY  NAME ' });
+    const body = successEnvelope({
+      businessName: 'MERCHANT',
+      branchDescription: ' CATEGORY  NAME ',
+    });
     const outcome = interpretDetailEnvelope(body);
     expect(outcome.state).toBe('succeeded');
     expect(outcome.sourceCategory).toBe('CATEGORY NAME');
@@ -86,15 +95,26 @@ describe('interpretDetailEnvelope', () => {
   });
 
   it('keeps only whitelisted detail fields', () => {
-    const body = successEnvelope({ businessName: 'M', branchDescription: 'C', countryCode: 'IL', somethingElse: 'dropped' });
+    const body = successEnvelope({
+      businessName: 'M',
+      branchDescription: 'C',
+      countryCode: 'IL',
+      somethingElse: 'dropped',
+    });
     const outcome = interpretDetailEnvelope(body);
     expect(outcome.detailPayload).toEqual({ branchDescription: 'C', countryCode: 'IL' });
     expect(outcome.detailPayload).not.toHaveProperty('somethingElse');
   });
 
   it('stamps the schema version on every outcome', () => {
-    for (const body of [null, successEnvelope({ businessName: 'M' }), successEnvelope({ businessName: 'M', branchDescription: 'C' })]) {
-      expect(interpretDetailEnvelope(body).detailSchemaVersion).toBe(DIGITALV3_DETAIL_SCHEMA_VERSION);
+    for (const body of [
+      null,
+      successEnvelope({ businessName: 'M' }),
+      successEnvelope({ businessName: 'M', branchDescription: 'C' }),
+    ]) {
+      expect(interpretDetailEnvelope(body).detailSchemaVersion).toBe(
+        DIGITALV3_DETAIL_SCHEMA_VERSION,
+      );
     }
   });
 });

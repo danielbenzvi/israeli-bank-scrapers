@@ -40,7 +40,9 @@ describe('OTP submit candidates', () => {
     // phase clicked it instead of the code form's own control.
     const list = WK_OTP_SUBMIT as unknown as readonly IWkCandidate[];
     const textScoped = list.filter((c): boolean => c.value.includes('contains('));
-    const isEveryGuarded = textScoped.every((c): boolean => c.value.includes('onetrust-consent-sdk'));
+    const isEveryGuarded = textScoped.every((c): boolean =>
+      c.value.includes('onetrust-consent-sdk'),
+    );
     expect(textScoped.length).toBeGreaterThan(0);
     expect(isEveryGuarded).toBe(true);
   });
@@ -57,8 +59,9 @@ describe('OTP submit candidates', () => {
 
   it('prefers a real button over any element merely carrying the words', () => {
     const list = WK_OTP_SUBMIT as unknown as readonly IWkCandidate[];
-    const firstButtonScoped = indexOfFirst(list, (c): boolean =>
-      c.kind === 'xpath' && c.value.includes('contains('),
+    const firstButtonScoped = indexOfFirst(
+      list,
+      (c): boolean => c.kind === 'xpath' && c.value.includes('contains('),
     );
     const firstLooseText = indexOfFirst(list, (c): boolean => c.kind === 'clickableText');
     expect(firstButtonScoped).toBeGreaterThanOrEqual(0);
@@ -83,7 +86,9 @@ describe('OTP input candidates', () => {
     // what POST re-probes to ask whether the form is still there — so matching
     // it reports a completed login as a failed one.
     const list = WK_OTP_INPUT as unknown as readonly IWkCandidate[];
-    const isBarePresent = list.some((c): boolean => c.value === '//input[@autocomplete="one-time-code"]');
+    const isBarePresent = list.some(
+      (c): boolean => c.value === '//input[@autocomplete="one-time-code"]',
+    );
     expect(isBarePresent).toBe(false);
   });
 });

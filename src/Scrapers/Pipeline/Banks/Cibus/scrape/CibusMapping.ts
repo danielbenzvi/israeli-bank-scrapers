@@ -13,11 +13,10 @@
  * reported through `balance`.
  */
 
-import type { Brand } from '../../../Types/Brand.js';
 import type { ITransaction, ITransactionsAccount } from '../../../../../Transactions.js';
 import { TransactionStatuses, TransactionTypes } from '../../../../../Transactions.js';
-import type { ScraperOptions } from '../../../../Base/Interface.js';
 import ScraperError from '../../../../Base/ScraperError.js';
+import type { Brand } from '../../../Types/Brand.js';
 
 /** The provider's own date format, which it uses for every row. */
 const PROVIDER_DATE_RE = /^(\d{2})\/(\d{2})\/(\d{4})$/;
@@ -221,18 +220,19 @@ function toDates(raw: string): { date: string; processedDate: string } {
  * then saw a malformed contract where the real fault was an absent option, and
  * one funding the household's benefit accounting off it would have read zero.
  * @param deal - A raw purchase row.
- * @param options - Scraper options, for raw-transaction inclusion.
+ * No `rawTransaction`: `includeRawTransaction` is a Legacy-only option upstream
+ * deprecated (#542), and the household's consumer never sets it, so the raw row
+ * was never attached on a real run.
  * @returns A standard transaction.
  */
-export function toTransaction(deal: ICibusDeal, options: ScraperOptions): ITransaction {
+export function toTransaction(deal: ICibusDeal): ITransaction {
   const amount = -deal.price;
   const money = { originalAmount: amount, chargedAmount: amount, ...ILS };
   const dates = toDates(deal.date);
   const core = { type: TransactionTypes.Normal, identifier: deal.deal_id, ...dates };
   const body = { description: deal.rest_name ?? '', status: TransactionStatuses.Completed };
-  const raw = options.includeRawTransaction === true ? { rawTransaction: deal } : {};
   const extra = { providerExtra: toDealExtra(deal) };
-  return { ...core, ...money, ...body, ...extra, ...raw };
+  return { ...core, ...money, ...body, ...extra };
 }
 
 /**
@@ -271,17 +271,15 @@ export function toAccountBalance(budget: ICibusBudget): { balance?: number } {
  * identifier is sensitive.
  * @param deals - The countable purchase rows, already partitioned by activity.
  * @param budget - The budget block from the endpoint that carries one.
- * @param options - Scraper options, threaded to the row mapper.
  * @returns One account with its transactions.
  */
 export function toAccount(
   deals: readonly ICibusDeal[],
   budget: ICibusBudget,
-  options: ScraperOptions,
 ): ITransactionsAccount {
   // Already partitioned by the caller, which is what lets it report how many
   // rows it had to drop. Filtering here as well would hide that count behind a
   // second, silent pass.
-  const txns = deals.map(deal => toTransaction(deal, options));
+  const txns = deals.map(deal => toTransaction(deal));
   return { accountNumber: 'cibus', ...toAccountBalance(budget), txns };
 }
