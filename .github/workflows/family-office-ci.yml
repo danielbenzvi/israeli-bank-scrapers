@@ -1,0 +1,58 @@
+name: Household branch checks
+
+# The household carries its own patches on top of upstream in `family-office/*`
+# branches and opens no pull requests, so none of upstream's workflows ever run
+# on them — pr.yml fires on pull_request only, and main-pipeline.yml on main.
+# Until this file, the last CI run anywhere on this fork was 2026-08-13.
+#
+# OFFLINE BY DESIGN. Upstream's pr.yml also runs live-login E2E jobs that read
+# bank credentials from repository secrets. This fork must never hold those:
+# the household's credentials live in an OS keychain or a gitignored .env, and a
+# CI secret store is neither. So this workflow references no secrets at all, and
+# live behaviour is checked by the household's own replay gate instead.
+#
+# Two Node versions: .nvmrc is what upstream tests against; 22 is what the
+# household's production image runs.
+
+on:
+  push:
+    branches: ['family-office/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: family-office-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint, types, unit suite, bundle (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22', 'nvmrc']
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v6
+        with:
+          node-version: ${{ matrix.node != 'nvmrc' && matrix.node || '' }}
+          node-version-file: ${{ matrix.node == 'nvmrc' && '.nvmrc' || '' }}
+          cache: npm
+
+      # WITH scripts: the postinstall patches playwright-core for Camoufox, and a
+      # browser-stack guard in the unit suite fails without it.
+      - run: npm ci --no-audit --no-fund
+
+      - run: npm run lint
+      - run: npm run type-check
+      - run: npm run test:unit
+        env:
+          TZ: Asia/Jerusalem
+      - run: npx tsup
