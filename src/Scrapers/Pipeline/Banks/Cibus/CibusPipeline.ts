@@ -2,6 +2,11 @@
  * Cibus (Pluxee) pipeline — browser login + OTP, then a hard-model api-direct
  * scrape against the provider's single verb-dispatched data endpoint.
  *
+ * NOT REGISTERED (household, 2026-10-24): `createScraper` serves Cibus with the
+ * legacy `CibusScraper`, because this pipeline cannot complete a cold login —
+ * see the note on PIPELINE_REGISTRY_AMEX_TO_MAX. Kept, and still tested, as the
+ * starting point for that work.
+ *
  * WHY THE FORM IS DRIVEN RATHER THAN BYPASSED. The auth endpoint enforces
  * reCAPTCHA v3, and the legacy scraper reached it by loading the page purely so
  * the provider's script would run, minting a token through their API, and

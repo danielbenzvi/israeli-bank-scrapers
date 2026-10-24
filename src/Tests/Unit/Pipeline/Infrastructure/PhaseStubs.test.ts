@@ -63,11 +63,14 @@ describe('createLoginStep', () => {
 });
 
 describe('PipelineRegistry', () => {
-  it('contains 18 pipeline banks', () => {
+  it('contains 17 pipeline banks', () => {
     const keys = Object.keys(PIPELINE_REGISTRY);
     expect(keys).toContain('amex');
     expect(keys).toContain('beinleumi');
-    expect(keys).toContain('cibus');
+    // Household: Cibus is served by the legacy CibusScraper, never the pipeline
+    // (PipelineRegistryAmexToMax explains why). Asserted, so a rebase that
+    // re-adds it is seen.
+    expect(keys).not.toContain('cibus');
     expect(keys).toContain('discount');
     expect(keys).toContain('hapoalim');
     expect(keys).toContain('isracard');
@@ -83,10 +86,10 @@ describe('PipelineRegistry', () => {
     expect(keys).toContain('pepper');
     expect(keys).toContain('visaCal');
     expect(keys).toContain('yahav');
-    // Household fork: upstream's count plus Cibus (household-only, not published
-    // upstream — family-office R-029 §7). Upstream and the household each once
-    // raised this from 16 to 17 for different banks, and git merged the two
-    // identical edits silently; state the sum here so the next rebase sees it.
-    expect(keys).toHaveLength(18);
+    // Household fork: upstream's count. Cibus was the household's one addition
+    // and is now deliberately unregistered (2026-10-24); upstream and the
+    // household once raised this count for different banks and git merged the
+    // two identical edits silently — state it here so the next rebase sees it.
+    expect(keys).toHaveLength(17);
   });
 });

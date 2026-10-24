@@ -8,6 +8,7 @@ import {
   readActivity,
   toIsoDate,
 } from '../../Scrapers/Cibus/CibusMapping.js';
+import CibusScraper from '../../Scrapers/Cibus/CibusScraper.js';
 import {
   ALLOWED_URLS,
   AUTH_TOKEN_URL,
@@ -19,6 +20,7 @@ import {
   SITE_KEY_PATTERN,
 } from '../../Scrapers/Cibus/Config/CibusApiConfig.js';
 import { SCRAPER_CONFIGURATION } from '../../Scrapers/Registry/Config/ScraperConfig.js';
+import createScraper from '../../Scrapers/Registry/Factory.js';
 
 describe('Cibus — read-only guarantee', () => {
   /**
@@ -63,6 +65,14 @@ describe('Cibus — read-only guarantee', () => {
 });
 
 describe('Cibus — registry wiring', () => {
+  it('is served by the legacy CibusScraper, never the pipeline', () => {
+    // The factory is pipeline-first, and the Cibus pipeline cannot complete a
+    // cold login: no SMS, no device token (PipelineRegistryAmexToMax). The
+    // legacy scraper answers the 210 challenge through otpCodeRetriever.
+    const scraper = createScraper({ companyId: CompanyTypes.Cibus, startDate: new Date() });
+    expect(scraper).toBeInstanceOf(CibusScraper);
+  });
+
   it('is a first-class company with its own config entry', () => {
     expect(CompanyTypes.Cibus).toBe('cibus');
     const cfg = SCRAPER_CONFIGURATION.banks[CompanyTypes.Cibus];
