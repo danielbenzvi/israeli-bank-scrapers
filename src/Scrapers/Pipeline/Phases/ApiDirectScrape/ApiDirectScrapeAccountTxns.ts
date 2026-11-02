@@ -11,6 +11,7 @@ import type { ITransaction } from '../../../../Transactions.js';
 import type { IWindowCoverage } from '../../../../WindowCoverage.js';
 import { reportMapRejects } from '../../Mediator/Scrape/CoverageAudit/MapRejects.js';
 import { classifyWindowCoverage } from '../../Mediator/Scrape/CoverageAudit/WindowCoverageVerdict.js';
+import { shiftInstallmentDates } from '../../Mediator/Scrape/InstallmentDates.js';
 import { applyStartWindow } from '../../Mediator/Scrape/StartWindow.js';
 import { collapseDuplicates } from '../../Mediator/Scrape/TxnDedup.js';
 import type { Procedure } from '../../Types/Procedure.js';
@@ -75,7 +76,10 @@ function refineTxns<TAcct, TCursor>(
   const mapped = mapAndReport(a, raws, label);
   const keyFields = a.shape.transactions.dedupKeyFields ?? [];
   const unique = collapseDuplicates({ txns: mapped, keyFields, label });
-  return applyStartWindow({ txns: unique.kept, startDate: a.ctx.options.startDate, label }).kept;
+  // Shift BEFORE windowing: the window filters on `date`, and a payment of an
+  // older purchase is billed inside the window only once it carries its own month.
+  const dated = shiftInstallmentDates(unique.kept);
+  return applyStartWindow({ txns: dated, startDate: a.ctx.options.startDate, label }).kept;
 }
 
 /** One account's transactions plus the facts its walk produced. */
