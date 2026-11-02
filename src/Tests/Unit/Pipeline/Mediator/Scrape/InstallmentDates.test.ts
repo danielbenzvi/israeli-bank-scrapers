@@ -37,7 +37,12 @@ function payment(date: string, num: number, total: number): ITransaction {
  * @returns Transaction of type normal.
  */
 function ordinary(date: string): ITransaction {
-  return { type: TransactionTypes.Normal, date, description: 'row', chargedAmount: -1 } as unknown as ITransaction;
+  return {
+    type: TransactionTypes.Normal,
+    date,
+    description: 'row',
+    chargedAmount: -1,
+  } as unknown as ITransaction;
 }
 
 /**
