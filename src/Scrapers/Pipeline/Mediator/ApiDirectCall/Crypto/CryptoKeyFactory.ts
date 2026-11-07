@@ -7,7 +7,7 @@
  */
 
 import type { KeyObject } from 'node:crypto';
-import { createHash, generateKeyPairSync } from 'node:crypto';
+import { createHash, createPrivateKey, createPublicKey, generateKeyPairSync } from 'node:crypto';
 
 import { ScraperErrorTypes } from '../../../../Base/ErrorTypes.js';
 import type { Procedure } from '../../../Types/Procedure.js';
@@ -88,6 +88,23 @@ function generateKeypair(algorithm: SignerAlgorithm): Procedure<IGenericKeypair>
   return factory();
 }
 
+/**
+ * Rebuild an IGenericKeypair from a persisted PKCS#8 private-key PEM.
+ * The derived public key (and thus key-id) is deterministic, so a device
+ * re-auth reuses exactly the key registered at bind.
+ * @param privateKeyPem - PKCS#8 PEM string.
+ * @returns IGenericKeypair Procedure.
+ */
+function importKeypair(privateKeyPem: string): Procedure<IGenericKeypair> {
+  try {
+    const privateKey = createPrivateKey(privateKeyPem);
+    const publicKey = createPublicKey(privateKey);
+    return succeed(packKeypair(privateKey, publicKey));
+  } catch (e) {
+    return fail(ScraperErrorTypes.Generic, `failed to import keypair: ${(e as Error).message}`);
+  }
+}
+
 export type { IGenericKeypair };
 export default generateKeypair;
-export { generateKeypair };
+export { generateKeypair, importKeypair };
