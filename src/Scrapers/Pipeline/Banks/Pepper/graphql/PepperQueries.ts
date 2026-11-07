@@ -38,45 +38,55 @@ query fetchAccountBalance($accountId: String!) {
 }
 `;
 
+// Pepper removed `oshTransactionsNew` (it now returns a downstream HTTP 400);
+// the current API exposes `oshTransactionsPagination`, paginated by
+// `nextTransactionSerialNumber`. The first page sends only { accountId }.
 const TRANSACTIONS = `
 query Transactions(
   $accountId: String!
-  $from: String
-  $to: String
-  $pageNumber: Int
-  $pageCount: Int
+  $nextTransactionSerialNumber: Int
 ) {
   accounts {
-    oshTransactionsNew(
+    oshTransactionsPagination(
       accountId: $accountId
-      from: $from
-      to: $to
-      pageNumber: $pageNumber
-      pageCount: $pageCount
+      nextTransactionSerialNumber: $nextTransactionSerialNumber
     ) {
       totalCount
+      nextTransactionSerialNumber
       transactions {
         transactionId
+        transactionSerialNumber
         transactionAmount
+        currency
         bookingDate
         effectiveDate
-        currency
+        processingDate
         description
         title
         subTitle
         referenceNumber
+        runningBalance
+        transactionCategory
+        pepperMainTransactionType
+        status
         liquidityStatus
       }
       pendingTransactions {
         transactionId
+        transactionSerialNumber
         transactionAmount
+        currency
         bookingDate
         effectiveDate
-        currency
+        processingDate
         description
         title
         subTitle
         referenceNumber
+        runningBalance
+        transactionCategory
+        pepperMainTransactionType
+        status
         liquidityStatus
       }
     }

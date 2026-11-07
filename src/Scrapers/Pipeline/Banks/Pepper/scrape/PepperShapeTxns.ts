@@ -1,6 +1,9 @@
 /**
- * Pepper scrape shape — transactions helpers (cursor, pagination merge).
- * Split from PepperShapeHelpers.ts to respect the 150-LOC ceiling.
+ * Pepper scrape shape — transactions helpers.
+ *
+ * Pepper paginates transactions via `oshTransactionsPagination`, walking back in
+ * time with the cursor `nextTransactionSerialNumber` (the first page sends only
+ * { accountId }). Amounts are already signed (debits negative).
  */
 
 import moment from 'moment';
@@ -10,125 +13,73 @@ import type {
   VarsMap,
 } from '../../../Phases/ApiDirectScrape/IApiDirectScrapeShape.js';
 import type { IPage } from '../../../Strategy/Fetch/Pagination.js';
-import type { Brand } from '../../../Types/Brand.js';
 import type { IActionContext } from '../../../Types/PipelineContext.js';
 import type { IPepperAcct } from './PepperShapeHelpers.js';
 
-/** 1-based pagination page number — branded for Rule #15. */
-type PageNumber = Brand<number, 'PepperPageNumber'>;
-/** Last-page predicate result — branded for Rule #15. */
-type IsLastPage = Brand<boolean, 'PepperIsLastPage'>;
-
 const ISO_DATE_FMT = 'YYYY-MM-DD';
-/** Page-size limit for transactions pagination. */
-export const PAGE_SIZE = 100;
-const FIRST_PAGE = 1;
 
 type PepperTxn = Record<string, unknown>;
 
 interface IOshBlock {
   readonly totalCount?: number;
+  readonly nextTransactionSerialNumber?: number | null;
   readonly transactions?: readonly PepperTxn[];
   readonly pendingTransactions?: readonly PepperTxn[];
 }
 interface ITxnsResp {
-  readonly accounts?: { readonly oshTransactionsNew?: IOshBlock };
-}
-
-/** Scrape window (from/to ISO strings). */
-export interface IWindow {
-  readonly from: string;
-  readonly to: string;
+  readonly accounts?: { readonly oshTransactionsPagination?: IOshBlock };
 }
 
 /**
- * Compute the scrape window from ScraperOptions.startDate.
- * @param ctx - Action context.
- * @returns from/to ISO strings.
- */
-export function windowOf(ctx: IActionContext): IWindow {
-  const from = moment(ctx.options.startDate).format(ISO_DATE_FMT);
-  const to = moment().format(ISO_DATE_FMT);
-  return { from, to };
-}
-
-/**
- * Resolve the 1-based page number for the request.
- * @param cursor - Incoming cursor (false on first call).
- * @returns Page number.
- */
-export function pageNumberOf(cursor: number | false): PageNumber {
-  if (cursor === false) return FIRST_PAGE as PageNumber;
-  return cursor as PageNumber;
-}
-
-/**
- * Build txns variables for one page.
+ * Build txns variables for one page. First page: just the account id.
+ * Later pages carry the serial-number cursor returned by the previous page.
  * @param acct - Pepper account.
- * @param cursor - Cursor (false on first call).
- * @param ctx - Action context.
+ * @param cursor - Serial-number cursor (false on the first call).
  * @returns Variables map.
  */
-export function txnsVars(acct: IPepperAcct, cursor: number | false, ctx: IActionContext): VarsMap {
-  const window = windowOf(ctx);
-  const pageNumber = pageNumberOf(cursor);
-  const { accountId } = acct;
-  return { accountId, from: window.from, to: window.to, pageNumber, pageCount: PAGE_SIZE };
+export function txnsVars(acct: IPepperAcct, cursor: number | false): VarsMap {
+  if (cursor === false) return { accountId: acct.accountId };
+  return { accountId: acct.accountId, nextTransactionSerialNumber: cursor };
 }
 
-/**
- * Terminate when empty, under-page, or cumulative coverage meets totalCount.
- * @param rows - Rows on the current page.
- * @param page - Page number just fetched.
- * @param total - Server-declared totalCount.
- * @returns True when pagination should stop.
- */
-export function isLastPage(rows: number, page: number, total: number): IsLastPage {
-  if (rows === 0) return true as IsLastPage;
-  if (rows < PAGE_SIZE) return true as IsLastPage;
-  return (page * PAGE_SIZE >= total) as IsLastPage;
-}
-
-/**
- * Resolve next cursor — false when done, else page+1.
- * @param isDone - Whether pagination should stop after this page.
- * @param page - Page number just fetched.
- * @returns Next cursor value.
- */
-function nextCursorOf(isDone: boolean, page: number): number | false {
-  if (isDone) return false;
-  return page + 1;
-}
-
-/**
- * Merge posted + pending rows into one page.
- * @param osh - Optional oshTransactionsNew block.
- * @returns Merged rows (empty when block is missing).
- */
+/** Merge posted + pending rows into one page (futures are not yet real). */
 function mergeRows(osh?: IOshBlock): readonly PepperTxn[] {
   const posted = osh?.transactions ?? [];
   const pending = osh?.pendingTransactions ?? [];
   return [...posted, ...pending];
 }
 
+/** Earliest bookingDate on the page, or null when none parse. */
+function oldestDate(rows: readonly PepperTxn[]): moment.Moment | null {
+  const dates = rows
+    .map((r) => moment(String(r.bookingDate ?? r.effectiveDate ?? '')))
+    .filter((m) => m.isValid());
+  if (dates.length === 0) return null;
+  return moment.min(dates);
+}
+
 /**
- * Extract one page from the unwrapped Transactions response.
- *
- * Signature matches the unified scrape-shape contract: takes a full
- * {@link IExtractPageArgs} bundle. Pepper uses `args.body` +
- * `args.cursor`; banks that need the per-account context (PayBox)
- * read `args.acct` / `args.ctx`.
- * @param args - Bundle carrying body + cursor + acct + ctx.
+ * Extract one page from the Transactions response and decide the next cursor.
+ * Stops when the server returns no further cursor, the page is empty, or the
+ * page has reached back past ScraperOptions.startDate.
+ * @param args - Bundle carrying body + cursor + ctx.
  * @returns Page rows + nextCursor.
  */
 export function txnsExtractPage(
   args: IExtractPageArgs<IPepperAcct, number>,
 ): IPage<object, number> {
   const resp = args.body as unknown as ITxnsResp;
-  const osh = resp.accounts?.oshTransactionsNew;
+  const osh = resp.accounts?.oshTransactionsPagination;
   const rows = mergeRows(osh);
-  const page = pageNumberOf(args.cursor);
-  const total = osh?.totalCount ?? 0;
-  const isDone = isLastPage(rows.length, page, total);
-  return { items: rows, nextCursor: nextCursorOf(isDone, page) };
+  const nextSerial = osh?.nextTransactionSerialNumber;
+
+  const ctx = args.ctx as IActionContext;
+  const startDate = moment(ctx.options.startDate).format(ISO_DATE_FMT);
+  const oldest = oldestDate(rows);
+  const reachedStart = oldest !== null && oldest.format(ISO_DATE_FMT) < startDate;
+
+  const hasNext = typeof nextSerial === 'number' && nextSerial > 0;
+  const nextCursor: number | false =
+    rows.length === 0 || reachedStart || !hasNext ? false : (nextSerial as number);
+  return { items: rows, nextCursor };
 }
