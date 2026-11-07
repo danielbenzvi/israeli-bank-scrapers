@@ -48,7 +48,12 @@ interface IBalanceResp {
 export function extractAccounts(args: IExtractAccountsArgs): readonly IPepperAcct[] {
   const resp = args.body as unknown as ICustomerResp;
   const customers = resp.userDataV2?.getUserDataV2?.customerAndAccounts ?? [];
-  return customers.flatMap((c): readonly IPepperAcct[] => c.accounts ?? []);
+  const all = customers.flatMap((c): readonly IPepperAcct[] => c.accounts ?? []);
+  // Only the shekel current account carries oshTransactionsPagination / balance;
+  // Foreign and SecuritiesAccount return a downstream 400. Scrape Ils, falling
+  // back to all accounts if the category field ever changes shape.
+  const ils = all.filter((a): boolean => a.accountCategory === 'Ils');
+  return ils.length > 0 ? ils : all;
 }
 
 /**
