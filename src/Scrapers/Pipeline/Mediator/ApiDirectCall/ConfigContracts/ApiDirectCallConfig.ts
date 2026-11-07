@@ -51,6 +51,16 @@ interface IApiDirectCallConfig {
   /** Optional warm-start shortcut — see IWarmStartConfig for semantics. */
   readonly warmStart?: IWarmStartConfig;
   /**
+   * Optional device re-auth path. When no fresh long-term token is available
+   * but all `credsFields` are present (e.g. a persisted device id + keypair
+   * from a prior bind), run `steps` from index 0 instead of the cold steps —
+   * for banks whose returning-device login skips SMS (password only).
+   */
+  readonly deviceReauth?: {
+    readonly credsFields: readonly string[];
+    readonly steps: readonly IStepConfig[];
+  };
+  /**
    * Static cryptographic literals accessible via `config.secrets.<name>`
    * RefTokens. Public-extractable constants (signing keys lifted from
    * APKs, fixed suffixes) live here; per-user secrets do not.

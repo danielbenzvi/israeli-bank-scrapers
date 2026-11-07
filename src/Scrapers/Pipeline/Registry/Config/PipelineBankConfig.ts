@@ -186,6 +186,7 @@ const PIPELINE_BANK_CONFIG: Partial<Record<CompanyTypes, IPipelineBankConfig>> =
       graphql: 'https://fe-sec.pepper.co.il/graphql',
       paths: {
         'auth.bind': 'https://sa.pepper.co.il/api/v2/auth/bind',
+        'auth.login': 'https://sa.pepper.co.il/api/v2/auth/login',
         'auth.assert': 'https://sa.pepper.co.il/api/v2/auth/assert',
         'auth.logout': 'https://sa.pepper.co.il/api/v2/auth/logout',
       },

@@ -90,13 +90,40 @@ async function runConfiguredFlow(
  * @param args - Config + bus + ctx + creds + capture slot.
  * @returns Header-value procedure.
  */
+function pickDeviceReauthArgs(
+  config: IApiDirectCallConfig,
+  bus: IPrimeArgs['bus'],
+  creds: GenericCreds,
+  companyId: IPrimeArgs['ctx']['companyId'],
+): IRunFlowArgs | false {
+  const dr = config.deviceReauth;
+  if (dr === undefined) return false;
+  const ready = dr.credsFields.every((f): boolean => typeof creds[f] === 'string' && creds[f] !== '');
+  if (!ready) return false;
+  const drConfig: IApiDirectCallConfig = { ...config, steps: dr.steps };
+  return {
+    config: drConfig,
+    bus,
+    creds,
+    companyId,
+    initialCarry: { deviceId: creds.deviceId as string },
+    startStepIndex: 0,
+  };
+}
+
 async function primeInitialImpl(args: IPrimeArgs): Promise<Procedure<string>> {
   const { config, bus, ctx, creds, slot } = args;
   const stored = pickWarmSeed(config, creds);
-  slot.usedWarmPath = stored !== false;
   if (stored === false) {
+    const drArgs = pickDeviceReauthArgs(config, bus, creds, ctx.companyId);
+    if (drArgs !== false) {
+      slot.usedWarmPath = true;
+      return runConfiguredFlow(drArgs, slot);
+    }
+    slot.usedWarmPath = false;
     return runConfiguredFlow({ config, bus, creds, companyId: ctx.companyId }, slot);
   }
+  slot.usedWarmPath = true;
   const warmArgs = makeWarmArgs({ config, bus, creds, stored, companyId: ctx.companyId });
   return runConfiguredFlow(warmArgs, slot);
 }

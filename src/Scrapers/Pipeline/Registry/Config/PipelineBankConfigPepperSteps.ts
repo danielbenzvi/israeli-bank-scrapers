@@ -147,4 +147,57 @@ const ASSERT_OTP_STEP = {
   cookieJar: true,
 };
 
-export { ASSERT_OTP_STEP, ASSERT_PWD_STEP, BIND_STEP };
+/**
+ * Warm Step 1: /auth/login — returning, already-registered device. No SMS.
+ * Unlike bind it sends NO public_key (the device key is already registered;
+ * Pepper verifies the Content-Signature against it), carries `did` in the
+ * query, and its assert(password) returns the token directly. The signing
+ * keypair MUST be the one registered at bind (injected from creds).
+ */
+const LOGIN_STEP = {
+  name: 'login' as const,
+  urlTag: 'auth.login' as const,
+  queryTemplate: {
+    aid: { $literal: AID },
+    did: { $ref: 'carry.deviceId' as const },
+    locale: { $literal: LOCALE },
+    tsm: { $ref: 'nowMs' as const },
+  },
+  body: {
+    shape: {
+      headers: [
+        { type: { $literal: HEADER_TYPE_FLOW_ID }, flow_id: { $ref: FLOW_ID_REF } },
+        { type: { $literal: HEADER_TYPE_UID }, uid: { $ref: PHONE_NUMBER_REF } },
+      ],
+      data: {
+        collection_result: { $ref: 'fingerprint' as const },
+        policy_request_id: { $literal: 'default' },
+        params: {
+          CellPhoneID: { $ref: 'uuid' as const },
+          Version_App: { $literal: APK_VERSION },
+          transactionId: { $ref: 'uuid' as const },
+        },
+      },
+    },
+  },
+  extractsToCarry: {
+    challenge: '/data/challenge',
+    pwdAssertionId: '/data/control_flow/0/methods/?type=password/assertion_id',
+    sessionId: '/headers/*session_id',
+    deviceId: '/headers/*device_id',
+  },
+  cookieJar: true,
+};
+
+/**
+ * Warm Step 2: /auth/assert (method=password) on a registered device —
+ * returns the JWT directly (no SMS). Same as ASSERT_PWD_STEP but it
+ * harvests `/data/token` instead of an SMS assertion id.
+ */
+const ASSERT_PWD_LOGIN_STEP = {
+  ...ASSERT_PWD_STEP,
+  name: 'assertPasswordLogin' as const,
+  extractsToCarry: { token: '/data/token' },
+};
+
+export { ASSERT_OTP_STEP, ASSERT_PWD_LOGIN_STEP, ASSERT_PWD_STEP, BIND_STEP, LOGIN_STEP };

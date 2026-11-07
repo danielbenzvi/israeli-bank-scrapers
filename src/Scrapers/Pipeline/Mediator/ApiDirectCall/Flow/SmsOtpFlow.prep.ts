@@ -7,7 +7,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Procedure } from '../../../Types/Procedure.js';
 import { isOk, succeed } from '../../../Types/Procedure.js';
-import { generateKeypair } from '../Crypto/CryptoKeyFactory.js';
+import { generateKeypair, importKeypair } from '../Crypto/CryptoKeyFactory.js';
 import type { JsonValue } from '../Envelope/JsonPointer.js';
 import type { ICollectionResult } from '../Fingerprint/GenericFingerprintBuilder.js';
 import { buildCollectionResult } from '../Fingerprint/GenericFingerprintBuilder.js';
@@ -27,12 +27,19 @@ import type {
  * @param config - API-direct-call config.
  * @returns Procedure with keypair bundle (empty when no signer or AES).
  */
-function prepareKeypairs(config: IApiDirectCallConfig): Procedure<IKeypairBundle> {
+function keyFromCredsOrGenerate(pem: unknown, algo: 'ECDSA-P256' | 'RSA-2048') {
+  return typeof pem === 'string' && pem.length > 0 ? importKeypair(pem) : generateKeypair(algo);
+}
+
+function prepareKeypairs(
+  config: IApiDirectCallConfig,
+  creds: Readonly<Record<string, unknown>>,
+): Procedure<IKeypairBundle> {
   if (config.signer === undefined) return succeed({});
   if (config.signer.algorithm === 'AES-CBC-PKCS7') return succeed({});
-  const ecProc = generateKeypair('ECDSA-P256');
+  const ecProc = keyFromCredsOrGenerate(creds.ecPrivateKeyPem, 'ECDSA-P256');
   if (!isOk(ecProc)) return ecProc;
-  const rsaProc = generateKeypair('RSA-2048');
+  const rsaProc = keyFromCredsOrGenerate(creds.rsaPrivateKeyPem, 'RSA-2048');
   if (!isOk(rsaProc)) return rsaProc;
   return succeed({ ec: ecProc.value, rsa: rsaProc.value });
 }
@@ -110,7 +117,7 @@ function buildSmsOtpCarry(args: IRunSmsOtpArgs): Procedure<Readonly<Record<strin
  * @returns Core inputs procedure.
  */
 function prepCoreInputs(args: IRunSmsOtpArgs): Procedure<ICoreSmsOtpInputs> {
-  const keypairsProc = prepareKeypairs(args.config);
+  const keypairsProc = prepareKeypairs(args.config, args.creds as Readonly<Record<string, unknown>>);
   if (!isOk(keypairsProc)) return keypairsProc;
   const fpProc = prepareFingerprint(args.config);
   if (!isOk(fpProc)) return fpProc;

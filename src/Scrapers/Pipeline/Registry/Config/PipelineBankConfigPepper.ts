@@ -22,7 +22,13 @@ import {
   STATIC_HEADERS,
   TS_CLIENT_VERSION,
 } from './PipelineBankConfigPepperFingerprint.js';
-import { ASSERT_OTP_STEP, ASSERT_PWD_STEP, BIND_STEP } from './PipelineBankConfigPepperSteps.js';
+import {
+  ASSERT_OTP_STEP,
+  ASSERT_PWD_LOGIN_STEP,
+  ASSERT_PWD_STEP,
+  BIND_STEP,
+  LOGIN_STEP,
+} from './PipelineBankConfigPepperSteps.js';
 
 /** Pepper config literal — seeded into PIPELINE_BANK_CONFIG[PEPPER]. */
 const PEPPER_API_DIRECT_CALL: IApiDirectCallConfig = {
@@ -53,6 +59,12 @@ const PEPPER_API_DIRECT_CALL: IApiDirectCallConfig = {
   fingerprint: PEPPER_FINGERPRINT,
   probe: { queryTag: 'customer' },
   steps: [BIND_STEP, ASSERT_PWD_STEP, ASSERT_OTP_STEP],
+  // Returning-device re-auth (no SMS): requires a persisted device id + the
+  // EC/RSA keypair registered at bind. Runs login -> assert(password) -> token.
+  deviceReauth: {
+    credsFields: ['deviceId', 'ecPrivateKeyPem', 'rsaPrivateKeyPem'],
+    steps: [LOGIN_STEP, ASSERT_PWD_LOGIN_STEP],
+  },
 };
 
 export { PEPPER_API_DIRECT_CALL };
