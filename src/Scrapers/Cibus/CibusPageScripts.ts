@@ -14,6 +14,14 @@
  * None of these takes or returns a credential. A reCAPTCHA token is a
  * short-lived, single-use anti-abuse artifact bound to one request — it is not a
  * session and authorises nothing on its own.
+ *
+ * WHY `wrappedJSObject`. From Camoufox 158, `page.evaluate` runs in an isolated
+ * world: the DOM is shared, but globals the page's own scripts define are not
+ * visible, so `grecaptcha` reads as undefined and every login times out. Firefox
+ * exposes the page's real globals as `wrappedJSObject` there. It is absent on
+ * older Camoufox, where the evaluation already runs among the page's globals, so
+ * each script falls back to `globalThis`. Objects handed to the page must be made
+ * by the page, which is why the options below go through its own `JSON.parse`.
  */
 
 /** Shape of the reCAPTCHA v3 global, as far as this project uses it. */
@@ -26,6 +34,8 @@ interface IGrecaptcha {
 interface IPageScope {
   grecaptcha?: IGrecaptcha;
   document: Document;
+  JSON: typeof JSON;
+  wrappedJSObject?: IPageScope;
 }
 
 /**
@@ -66,7 +76,8 @@ const READ_RENDER_PARAM = (source: string): string => {
  * @returns True when `grecaptcha.execute` is callable now.
  */
 export const IS_RECAPTCHA_READY = (): boolean => {
-  const scope = globalThis as unknown as IPageScope;
+  const realm = globalThis as unknown as IPageScope;
+  const scope = realm.wrappedJSObject ?? realm;
   return scope.grecaptcha?.execute !== undefined;
 };
 
@@ -98,7 +109,8 @@ export const IS_RECAPTCHA_READY = (): boolean => {
  * @returns True when the script tag is now present.
  */
 export const INJECT_RECAPTCHA = (siteKey: string): boolean => {
-  const scope = globalThis as unknown as IPageScope;
+  const realm = globalThis as unknown as IPageScope;
+  const scope = realm.wrappedJSObject ?? realm;
   if (scope.grecaptcha?.execute) return true;
   const src = `https://www.google.com/recaptcha/api.js?render=${encodeURIComponent(siteKey)}`;
   const alreadyRequested = scope.document.querySelector(`script[src="${src}"]`);
@@ -131,13 +143,14 @@ const ADD_SCRIPT = (scope: IPageScope, src: string): boolean => {
  * @returns The token, or '' when the API is unavailable or declined.
  */
 export const MINT_WITH_KEY = async (pair: string): Promise<string> => {
-  const scope = globalThis as unknown as IPageScope;
+  const realm = globalThis as unknown as IPageScope;
+  const scope = realm.wrappedJSObject ?? realm;
   const api = scope.grecaptcha;
   if (!api?.execute) return '';
-  const parts = pair.split('\t');
-  const opts = { action: parts[1] ?? '' };
-  const minted = await api.execute(parts[0] ?? '', opts).catch(() => '');
-  return minted;
+  const [siteKey = '', action = ''] = pair.split('\t');
+  const opts = scope.JSON.parse(`{"action":"${action}"}`) as { action: string };
+  const pending = api.execute(siteKey, opts);
+  return Promise.resolve(pending).catch(() => '');
 };
 
 /**
@@ -149,6 +162,7 @@ export const MINT_WITH_KEY = async (pair: string): Promise<string> => {
  * @returns True when the Enterprise namespace exists.
  */
 export const READ_ENTERPRISE_FLAG = (): boolean => {
-  const scope = globalThis as unknown as IPageScope;
+  const realm = globalThis as unknown as IPageScope;
+  const scope = realm.wrappedJSObject ?? realm;
   return typeof scope.grecaptcha?.enterprise !== 'undefined';
 };
